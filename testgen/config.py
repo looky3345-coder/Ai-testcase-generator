@@ -16,11 +16,12 @@ DEFAULT_PROMPTS_DIR = DEFAULT_OUTPUT_DIR / "prompts"
 SNIPPET_CONTEXT_LINES = 2
 
 # 두 LLM CLI 호출 커맨드. 프롬프트는 stdin으로 전달한다.
-# 로컬에 설치된 codex 버전의 비대화형 실행 플래그가 다르면 여기만 수정하면 된다.
-# (이 환경에는 codex CLI가 설치돼 있지 않아 직접 검증하지 못했다.)
+# - claude: `claude -p`가 표준 비대화형(print) 모드, stdin 프롬프트 지원
+# - codex: `codex exec -`가 비대화형 실행 + "-"로 stdin 전체를 프롬프트로 사용
+#   (OpenAI 공식 문서 확인: https://learn.chatgpt.com/docs/non-interactive-mode)
 LLM_RUNNERS = {
     "claude": ["claude", "-p"],
-    "codex": ["codex", "-p"],
+    "codex": ["codex", "exec", "-"],
 }
 
 LLM_TIMEOUT_SEC = 180
