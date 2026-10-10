@@ -122,6 +122,19 @@ python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
 - 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
 - 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
 
+### coverage.json 생성 단계에서 `GroqError: The api_key client option must be set ...` (또는 다른 API 키 오류)
+
+대상 프로젝트가 모듈 import 시점에 외부 API 클라이언트를 만들면서 키를 요구하는 경우다.
+커버리지 측정에는 **가짜 키**를 환경변수로 넣는다 (실제 키는 API 호출 비용·비결정적 결과 때문에 권장하지 않음).
+
+```powershell
+$env:GROQ_API_KEY = "dummy-key-for-coverage"   # 현재 PowerShell 창에서만 유효
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+
+- 실제 API를 호출하는 테스트는 인증 오류로 실패할 수 있지만 `coverage.json`은 생성된다 (해당 경로는 미커버 갭으로 잡힘).
+- 대상 프로젝트에 `.env.example` 등이 있으면 다른 필수 환경변수도 확인한다.
+
 ## 테스트
 
 ```bash
