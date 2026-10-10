@@ -25,6 +25,10 @@ class LLMBackend:
     def run(self, target_id: str, prompt: str) -> LLMResponse:
         raise NotImplementedError
 
+    def check_model(self) -> str | None:
+        """호출 전 사전 점검. 문제가 있으면 사용자에게 보여줄 오류 메시지, 없거나 점검할 수 없으면 None."""
+        return None
+
 
 class CLIBackend(LLMBackend):
     def __init__(self, name: str, command: list[str], timeout: int = LLM_TIMEOUT_SEC):
@@ -91,12 +95,46 @@ class OpenAICompatBackend(LLMBackend):
         temperature: float = 0.2,
     ):
         self.name = name
-        self.url = base_url.rstrip("/") + "/chat/completions"
+        self.base_url = base_url.rstrip("/")
+        self.url = self.base_url + "/chat/completions"
         self.model = model
         self.timeout = timeout
         self.response_schema = response_schema
         self.api_key = api_key
         self.temperature = temperature
+
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def check_model(self) -> str | None:
+        """`GET /models`로 런타임에 이 모델이 있는지 확인한다. 이름이 틀리면 대상 수만큼 404가 반복되므로 미리 막는다.
+        `/models`를 지원하지 않는 런타임이면 점검을 건너뛴다 (None)."""
+        request = urllib.request.Request(self.base_url + "/models", headers=self._headers(), method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as resp:
+                models = [m["id"] for m in json.loads(resp.read().decode("utf-8"))["data"]]
+        except urllib.error.HTTPError:
+            return None
+        except urllib.error.URLError as exc:
+            return f"{self.base_url} 연결 실패 ({exc.reason}) — 로컬 런타임(예: Ollama)이 실행 중인지 확인"
+        except (json.JSONDecodeError, KeyError, TypeError, socket.timeout, TimeoutError):
+            return None
+
+        # Ollama는 태그 없는 이름을 ':latest'로 취급한다
+        candidates = {self.model, f"{self.model}:latest"}
+        if self.model.endswith(":latest"):
+            candidates.add(self.model[: -len(":latest")])
+        if candidates & set(models):
+            return None
+        available = ", ".join(models) if models else "(없음)"
+        return (
+            f"모델 '{self.model}'이(가) {self.base_url} 에 없습니다.\n"
+            f"  사용 가능한 모델: {available}\n"
+            f"  `ollama list`의 NAME을 --models \"local:<NAME>\"에 그대로 쓰거나, `ollama cp <NAME> <별칭>`으로 별칭을 만드세요."
+        )
 
     def _request_body(self, prompt: str) -> dict:
         body = {
@@ -128,13 +166,10 @@ class OpenAICompatBackend(LLMBackend):
                 command=command,
             )
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(
             self.url,
             data=json.dumps(self._request_body(prompt)).encode("utf-8"),
-            headers=headers,
+            headers=self._headers(),
             method="POST",
         )
 

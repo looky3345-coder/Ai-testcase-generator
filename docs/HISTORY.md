@@ -2,6 +2,32 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 첫 실호출: Ollama 연결 성공, 모델 이름 불일치(404) → 호출 전 모델 확인 추가
+
+**배경**
+- 집 데스크톱에서 첫 실호출 (`--qualname analyze_work_hours --models local:ornith15-9b --workers 1`)
+- 결과: `FAIL (HTTP 404: model 'ornith15-9b' not found)` (2.1초)
+
+**과정**
+- 의미 있는 진전: 404는 Ollama가 돌려준 응답이므로 **OpenAICompatBackend → 실제 Ollama 연결은 처음으로 실사용 확인**됨
+- 원인: 가이드의 `ollama cp ... ornith15-9b` 별칭 단계를 건너뛰었거나 다른 이름으로 받아짐 (사용자 `ollama list` 확인 대기)
+- 문제점: 이름이 틀려도 대상마다 호출을 시도한 뒤에야 실패를 알 수 있음. 107개 전체 실행이면 107건 모두 404
+- 조치: 호출 전에 OpenAI 호환 `GET /models`로 모델 존재를 확인하고, 없으면 사용 가능한 이름 목록과 함께 즉시 종료.
+  Ollama는 태그 없는 이름을 `:latest`로 취급하므로 비교 시 반영. `/models`를 지원하지 않는 런타임은 점검을 건너뜀
+
+**변경**
+- `testgen/llm_runner.py`: `LLMBackend.check_model()`(기본 None), `OpenAICompatBackend.check_model()`, 헤더 생성 `_headers()`로 정리
+- `testgen/cli.py`: 백엔드 생성 직후 전체 백엔드 사전 점검, 실패 시 종료 코드 1
+- 테스트: 가짜 서버에 `/v1/models` 응답 추가. 일치(`:latest` 포함)/불일치 목록 표시/미지원 건너뜀/연결 실패,
+  CLI에서 잘못된 모델이면 chat 호출 0건으로 종료하는지 검증 (신규 5개)
+
+**검증**
+- 단위 테스트 41개 통과
+- **미검증**: 실제 Ollama의 `/v1/models` 응답 형식(`data[].id`)은 OpenAI 호환 규격 기준으로 구현했으며 사용자 PC에서 미확인
+
+**다음**
+- 사용자: `ollama list`로 이름 확인 → 별칭 생성 또는 전체 이름 사용 → 재실행
+
 ## 2026-10-10 — 집 데스크톱 dry-run 성공 + 경로 끝 역슬래시 오류 감지
 
 **배경**

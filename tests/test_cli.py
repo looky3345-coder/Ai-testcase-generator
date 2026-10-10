@@ -102,6 +102,22 @@ class SwallowedQuoteTest(unittest.TestCase):
             self.assertFalse(warn_swallowed_quote(["--coverage-json", "C:\\x\\backend", "--dry-run"]))
 
 
+class ModelPreflightTest(unittest.TestCase):
+    def test_wrong_model_stops_before_any_call(self):
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        fake = _FakeOpenAIServer(models=["hf.co/x/y:Q4_K_M"])
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, err = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:ornith15-9b", "--local-base-url", fake.base_url,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("hf.co/x/y:Q4_K_M", err)
+        self.assertEqual(fake.requests, [])  # chat/completions 호출 0건
+
+
 class FilterTargetsTest(unittest.TestCase):
     def test_qualname_filter(self):
         from testgen.cli import filter_targets

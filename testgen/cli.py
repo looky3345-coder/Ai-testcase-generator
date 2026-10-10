@@ -175,6 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[오류] {exc}", file=sys.stderr)
         return 1
     model_names = [runner.name for runner in runners]
+    for runner in runners:
+        problem = runner.check_model()
+        if problem:
+            print(f"[오류] {runner.name}: {problem}", file=sys.stderr)
+            return 1
 
     print(
         f"[2/2] 대상 {len(targets)}개 x 모델 {len(runners)}개 = {len(targets) * len(runners)}건 "
