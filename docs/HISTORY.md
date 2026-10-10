@@ -2,6 +2,29 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 실제 대상 프로젝트 첫 실행 시도: 대상 프로젝트 의존성 누락
+
+**배경**
+- 2단계 결과를 실제 프로젝트(`Checkine-Automation-Project/backend`)로 확인하기 위해
+  사용자 PC에서 `coverage.json` 생성(pytest --cov --cov-branch)을 시도
+
+**과정**
+- `conftest.py` 로딩 중 `ModuleNotFoundError: No module named 'groq'` 발생
+  (`app/main.py` → `routers/attendance.py` → `services/attendance_service.py` → `services/ai_service.py`의 `from groq import ...`)
+- 원인 분석: 이 도구의 문제가 아니라, pytest를 실행한 Python 환경에 대상 프로젝트 의존성이 설치되지 않은 것.
+  coverage.json 생성은 대상 프로젝트의 테스트가 돌아야 가능하므로 대상 프로젝트 환경 준비가 선행 조건
+
+**변경**
+- README에 "문제 해결" 섹션 추가: 대상 프로젝트 가상환경 생성·의존성 설치 후 coverage.json 생성 절차 (Windows PowerShell 기준)
+- 코드 변경 없음
+
+**검증**
+- 문서 변경만 있음. 해결 여부는 사용자 PC에서 의존성 설치 후 재실행으로 확인 필요 (**미검증**)
+- 대상 프로젝트의 `requirements.txt`에 `groq`가 포함되어 있는지는 확인하지 못함 (이 환경에 대상 프로젝트 없음)
+
+**다음**
+- 의존성 설치 후 coverage.json 생성 → `--dry-run`으로 대상 수·프롬프트 확인
+
 ## 2026-10-10 — 구현 2단계: 함수 단위 대상 묶기 + 분기 방향·함수 전체 컨텍스트
 
 **배경**

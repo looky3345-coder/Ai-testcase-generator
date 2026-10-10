@@ -104,6 +104,24 @@ python -m testgen.cli \
   런타임이 이를 지원하지 않으면 무시되고, 응답 검증 단계에서 형식 오류가 `PARSE FAIL`로 집계된다.
 - 로컬 CPU 추론은 느리므로 호출 타임아웃은 600초(`testgen/config.py`)이고, `--workers 1`부터 시작하길 권장.
 
+## 문제 해결
+
+### coverage.json 생성 단계에서 `ImportError while loading conftest ... ModuleNotFoundError`
+
+이 도구가 아니라 **대상 프로젝트의 의존성이 현재 Python 환경에 없다**는 뜻이다
+(예: `No module named 'groq'`). 대상 프로젝트 폴더에서 그 프로젝트의 가상환경을 켜고 의존성을 설치한 뒤 다시 실행한다.
+
+```powershell
+cd <대상 프로젝트>\backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest pytest-cov
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+
+- 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
+- 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
+
 ## 테스트
 
 ```bash
