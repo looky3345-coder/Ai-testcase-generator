@@ -93,6 +93,8 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
    - equivalence_partitioning: 각 구간(클래스)의 대표값을 쓰는 경우 (예: `< 3` 조건에서 0건은 동등분할 대표값, 2건·3건은 경계값)
 8. 예외 경로를 시험할 때는 mock이 예외를 발생시키게(side_effect) 하세요. 정상 경로의 mock 반환값으로
    코드 안의 대체(fallback) 문자열과 같은 값을 쓰지 마세요 — 어느 경로를 탔는지 구분할 수 없게 됩니다.
+9. 각 필드는 간결하게 쓰세요 (description·preconditions·input·expected 각각 한두 문장).
+   같은 사전조건을 케이스마다 길게 반복하지 말고 핵심 차이만 쓰세요 — 출력이 길면 중간에 잘립니다.
 
 출력 형식: 다른 설명 없이 아래 구조를 따르는 JSON 객체만 출력하세요.
 {_OUTPUT_SCHEMA}

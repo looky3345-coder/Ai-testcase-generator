@@ -194,7 +194,9 @@ class OpenAICompatBackend(LLMBackend):
             return fail(f"{self.timeout}초 타임아웃")
 
         try:
-            choice = json.loads(body)["choices"][0]
+            payload = json.loads(body)
+            choice = payload["choices"][0]
+            usage = payload.get("usage") or {}
             content = choice["message"].get("content")
             reasoning = choice["message"].get("reasoning") or choice["message"].get("reasoning_content") or ""
         except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
@@ -213,6 +215,8 @@ class OpenAICompatBackend(LLMBackend):
             # 본문이 비었거나 파싱이 안 될 때 원인(별도 reasoning 필드 등)을 볼 수 있도록 원본 HTTP 응답도 보관
             raw_response=body,
             reasoning=reasoning,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
         )
 
 

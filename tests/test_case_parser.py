@@ -56,6 +56,20 @@ class ParseTestCasesTest(unittest.TestCase):
         self.assertIn("비어 있습니다", parse_test_cases("").errors[0])
         self.assertIn("<think>만", parse_test_cases("<think>생각만</think>").errors[0])
 
+    def test_truncated_response_salvages_complete_cases(self):
+        # 실제 사례 재현: finish_reason=length로 셋째 케이스 중간에서 잘림
+        second = dict(VALID_CASE, id="TC-2", preconditions="get_today_deep_work_metrics는 {'dnd_active': True} 반환")
+        whole = json.dumps({"test_cases": [VALID_CASE, second, dict(VALID_CASE, id="TC-3")]}, ensure_ascii=False, indent=2)
+        truncated = whole[: whole.index('"TC-3"') + 3]
+        result = parse_test_cases(truncated)
+        self.assertEqual([c["id"] for c in result.test_cases], ["TC-1", "TC-2"])
+        self.assertIn("완성된 케이스 2개만 회수", result.errors[0])
+
+    def test_truncated_before_any_complete_case(self):
+        result = parse_test_cases('{"test_cases": [{"id": "TC-1", "techni')
+        self.assertEqual(result.test_cases, [])
+        self.assertTrue(result.errors)
+
     def test_no_json(self):
         result = parse_test_cases("JSON이 없는 응답")
         self.assertEqual(result.test_cases, [])

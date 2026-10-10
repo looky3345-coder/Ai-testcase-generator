@@ -148,7 +148,10 @@ class TruncatedResponseTest(unittest.TestCase):
 
         from tests.test_llm_runner import _FakeOpenAIServer
 
-        body = _json.dumps({"choices": [{"message": {"content": '{"test_cases": ['}, "finish_reason": "length"}]})
+        body = _json.dumps({
+            "choices": [{"message": {"content": '{"test_cases": ['}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 2600, "completion_tokens": 1496},
+        })
         fake = _FakeOpenAIServer(raw_body=body)
         self.addCleanup(fake.close)
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,6 +161,7 @@ class TruncatedResponseTest(unittest.TestCase):
             )
         self.assertIn("PARSE FAIL", out)
         self.assertIn("finish_reason=length", out)
+        self.assertIn("입력 2600 + 출력 1496 = 4096 토큰", out)
         self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)
 
 

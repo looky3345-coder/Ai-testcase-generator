@@ -234,7 +234,14 @@ def main(argv: list[str] | None = None) -> int:
                 r["ok"] += 1
                 r["cases"] += len(response.test_cases)
             if response.ok and response.finish_reason == "length":
-                status += " [응답이 길이 한도로 잘림: finish_reason=length]"
+                status += " [응답이 길이 한도로 잘림: finish_reason=length"
+                if response.prompt_tokens is not None and response.completion_tokens is not None:
+                    total = response.prompt_tokens + response.completion_tokens
+                    status += (
+                        f", 입력 {response.prompt_tokens} + 출력 {response.completion_tokens} = {total} 토큰"
+                        " — 합계가 4096/8192 같은 값이면 런타임 컨텍스트 한도"
+                    )
+                status += "]"
             print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({response.elapsed_sec:.1f}s)")
 
     print("\n=== 요약 ===")

@@ -94,6 +94,22 @@ python -m testgen.cli `
 | `연결 실패 ... ollama serve` | Ollama가 실행 중이 아님 → 시작 메뉴에서 Ollama 실행 |
 | `HTTP 404 ... model not found` | `--models local:<태그>`의 태그가 `ollama list`와 다름 |
 | `PARSE FAIL` + "답 본문은 비었고 사고 과정(reasoning)만 있음" | 추론형 모델이 thinking에 시간을 다 쓰고 답(content)을 비움 → `--local-thinking off`(기본값) 확인 |
-| `[응답이 길이 한도로 잘림: finish_reason=length]` | 출력이 컨텍스트 한도에 걸림 → `OLLAMA_CONTEXT_LENGTH` 상향(예: 16384) 후 Ollama 재시작 |
+| `[응답이 길이 한도로 잘림: finish_reason=length, 입력 + 출력 = N 토큰]` | N이 4096/8192 근처면 Ollama 컨텍스트 한도 → 아래 "컨텍스트 한도 늘리기" |
 | `PARSE FAIL` (그 외) | 모델이 JSON 형식을 지키지 못함 → 응답 JSON의 `raw_output`, `raw_response` 공유 |
 | `600초 타임아웃` | CPU로 돌고 있을 가능성 → `ollama ps` 확인 |
+
+## 컨텍스트 한도 늘리기 (응답이 잘릴 때)
+
+환경변수(`OLLAMA_CONTEXT_LENGTH`)는 Ollama 재시작이 필요하고 적용 여부가 잘 안 보인다.
+**모델 자체에 한도를 넣은 별칭**을 만드는 방법이 더 확실하다.
+
+```powershell
+@"
+FROM ornith15-9b
+PARAMETER num_ctx 16384
+"@ | Set-Content -Encoding ascii Modelfile.ornith16k
+ollama create ornith15-9b-16k -f Modelfile.ornith16k
+ollama show ornith15-9b-16k      # parameters에 num_ctx 16384 확인
+```
+이후 `--models "local:ornith15-9b-16k"`로 실행. 9B Q4 + 16K 컨텍스트는 VRAM 16GB 안에 들어갈 것으로 예상
+(`ollama ps`에서 100% GPU인지 확인, CPU로 넘어가면 12288 등으로 낮춤).

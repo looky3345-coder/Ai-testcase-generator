@@ -85,12 +85,41 @@ def _validate_case(index: int, case) -> list[str]:
     return errors
 
 
+def _salvage_truncated(raw: str) -> list | None:
+    """출력 한도로 잘린 응답(`{"test_cases": [ {…}, {…}, {…` 처럼 닫히지 않음)에서 완성된 케이스 객체만 꺼낸다.
+    실제 사례: 체크리스트 도입 후 모델이 케이스를 많이 쓰다 finish_reason=length로 잘렸고,
+    파서가 첫 케이스 하나를 최상위 객체로 오인해 완성된 케이스까지 모두 버렸다."""
+    text = _THINK_RE.sub("", raw)
+    key = text.find('"test_cases"')
+    start = text.find("[", key) if key >= 0 else -1
+    if start < 0:
+        return None
+    decoder = json.JSONDecoder()
+    cases, i = [], start + 1
+    while i < len(text):
+        if text[i] == "{":
+            try:
+                value, end = decoder.raw_decode(text, i)
+            except json.JSONDecodeError:
+                break  # 잘린 마지막 케이스
+            cases.append(value)
+            i = end
+        elif text[i] == "]":
+            break
+        else:
+            i += 1
+    return cases or None
+
+
 def parse_test_cases(raw: str) -> ParseResult:
     """유효한 케이스만 test_cases에 담고, 버린 이유는 errors에 남긴다."""
+    notes: list[str] = []
     try:
         data = _load_json(raw)
     except ValueError as exc:
-        return ParseResult(errors=[str(exc)])
+        data, load_error = None, str(exc)
+    else:
+        load_error = None
 
     # 예전 프롬프트(최상위 배열) 응답도 받아준다
     if isinstance(data, dict) and isinstance(data.get("test_cases"), list):
@@ -98,9 +127,12 @@ def parse_test_cases(raw: str) -> ParseResult:
     elif isinstance(data, list):
         cases = data
     else:
-        return ParseResult(errors=["최상위에 'test_cases' 배열이 없습니다"])
+        cases = _salvage_truncated(raw)
+        if cases is None:
+            return ParseResult(errors=[load_error or "최상위에 'test_cases' 배열이 없습니다"])
+        notes.append(f"응답이 닫히지 않음(잘림 추정) — 완성된 케이스 {len(cases)}개만 회수")
 
-    result = ParseResult()
+    result = ParseResult(errors=notes)
     for index, case in enumerate(cases, start=1):
         case_errors = _validate_case(index, case)
         if case_errors:

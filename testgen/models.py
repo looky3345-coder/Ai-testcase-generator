@@ -105,6 +105,8 @@ class LLMResponse:
     finish_reason: str | None = None  # OpenAI 호환 응답의 종료 사유 ("stop", "length" 등)
     raw_response: str = ""  # 원본 HTTP 응답 본문 (진단용, OpenAI 호환 백엔드만)
     reasoning: str = ""  # 추론형 모델이 별도 필드로 내보낸 사고 과정 (있을 때만)
+    prompt_tokens: int | None = None  # 입력 토큰 수 (런타임이 알려줄 때)
+    completion_tokens: int | None = None  # 출력 토큰 수
 
     def to_dict(self) -> dict:
         return asdict(self)
