@@ -42,6 +42,8 @@ class LLMResponse:
     error: str | None
     elapsed_sec: float
     command: list[str] = field(default_factory=list)
+    test_cases: list[dict] = field(default_factory=list)  # 스키마 검증을 통과한 케이스
+    parse_errors: list[str] = field(default_factory=list)  # 파싱 실패/버린 케이스 사유
 
     def to_dict(self) -> dict:
         return asdict(self)

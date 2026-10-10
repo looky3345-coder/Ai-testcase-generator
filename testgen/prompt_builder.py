@@ -8,18 +8,21 @@ _KIND_LABEL = {
     "branch": "일부 분기만 실행되고 나머지 분기는 실행되지 않은 조건문",
 }
 
-_OUTPUT_SCHEMA = """[
-  {
-    "id": "TC-1",
-    "technique": "boundary_value_analysis | equivalence_partitioning",
-    "description": "무엇을 검증하는 테스트인지 한국어로 간단히",
-    "target_lines": "이 테스트가 실행시키는 것으로 예상되는 라인 범위 (예: '45-48')",
-    "preconditions": "필요한 사전 상태. 없으면 빈 문자열",
-    "input": "테스트에 사용할 구체적인 입력값",
-    "expected": "기대 결과 (반환값, 상태 코드, 예외 등)",
-    "priority": "high | medium | low"
-  }
-]"""
+# 실제 강제/검증 스키마는 testgen.case_parser.TEST_CASES_SCHEMA. 여기는 모델에게 보여줄 설명용 예시.
+_OUTPUT_SCHEMA = """{
+  "test_cases": [
+    {
+      "id": "TC-1",
+      "technique": "boundary_value_analysis | equivalence_partitioning",
+      "description": "무엇을 검증하는 테스트인지 한국어로 간단히",
+      "target_lines": "이 테스트가 실행시키는 것으로 예상되는 라인 범위 (예: '45-48')",
+      "preconditions": "필요한 사전 상태. 없으면 빈 문자열",
+      "input": "테스트에 사용할 구체적인 입력값",
+      "expected": "기대 결과 (반환값, 상태 코드, 예외 등)",
+      "priority": "high | medium | low"
+    }
+  ]
+}"""
 
 _DEFAULT_FRAMEWORK_HINT = "pytest 기반 테스트 스위트."
 
@@ -52,6 +55,6 @@ def build_prompt(gap: CoverageGap, framework_hint: str | None = None) -> str:
 3. 이미 커버된 정상 케이스는 제안하지 말고, 지금 미커버 상태인 경로를 실행시키는 케이스만 제안하세요.
 4. 각 케이스가 위 스니펫의 어떤 라인을 타겟으로 하는지 target_lines에 명시하세요.
 
-출력 형식: 다른 설명 없이 아래 JSON 스키마를 따르는 JSON 배열만 출력하세요.
+출력 형식: 다른 설명 없이 아래 구조를 따르는 JSON 객체만 출력하세요.
 {_OUTPUT_SCHEMA}
 """

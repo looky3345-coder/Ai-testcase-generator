@@ -9,9 +9,10 @@
 
 1. **커버리지 갭 추출** — pytest-cov `coverage.json`에서 미커버 라인/분기를 찾아
    해당 함수의 소스 스니펫과 함께 추출 (구현 완료: `testgen/coverage_extractor.py`)
-2. **듀얼 LLM 테스트케이스 생성** — `claude -p`, `codex -p` 양쪽에 ISTQB 기법
-   (경계값 분석, 동등분할) 기반 테스트 케이스를 요청 (구현 완료: `testgen/prompt_builder.py`,
-   `testgen/llm_runner.py`, `testgen/cli.py`)
+2. **듀얼 LLM 테스트케이스 생성** — 두 모델에 ISTQB 기법(경계값 분석, 동등분할) 기반
+   테스트 케이스를 요청하고, 응답 JSON을 스키마로 검증 (구현 완료: `testgen/prompt_builder.py`,
+   `testgen/llm_runner.py`, `testgen/case_parser.py`, `testgen/cli.py`)
+   - 무과금 로컬 모델(Ollama 등 OpenAI 호환 API, 예: Ornith) 또는 유료 CLI(`claude -p`, `codex exec`) 선택
 3. **교차검증** — 두 모델 결과 중 공통 케이스를 신뢰도 높음으로 분류 (미구현)
 4. **CSV 변환 + 실행** — 케이스를 CSV로 변환해 기존 pytest 프레임워크로 실행 (미구현)
 5. **피드백 루프** — 실패 로그를 다시 LLM에 넣어 추가 엣지케이스 제안 (미구현)
@@ -24,11 +25,18 @@
 ## 요구사항
 
 - Python 3.9+ (표준 라이브러리만 사용, pip 설치 불필요)
-- `claude` CLI (PATH에 있어야 함, `claude -p` 비대화형 모드로 호출)
+- 아래 중 사용할 LLM 백엔드
+- **(무과금, 권장)** OpenAI 호환 API를 제공하는 로컬 런타임 — 기본은 [Ollama](https://ollama.com)
+  (`http://localhost:11434/v1`). llama.cpp server, LM Studio, vLLM도 `--local-base-url`로 사용 가능
+- (유료) `claude` CLI (PATH에 있어야 함, `claude -p` 비대화형 모드로 호출)
 - `codex` CLI (PATH에 있어야 함, `codex exec -` 비대화형 모드 + stdin 프롬프트로 호출.
   `npm install -g @openai/codex`로 설치 — 미설치 시 해당 모델만 실패로 기록되고 파이프라인은 계속 진행)
 
-## 현재 상태 (2026-09-14)
+## 현재 상태 (2026-10-10)
+
+- 로컬 LLM 백엔드(OpenAI 호환 API) + JSON 스키마 출력 강제 + 응답 검증 추가.
+  가짜 서버로 단위/통합 테스트 완료. **실제 로컬 모델로의 호출은 아직 미검증** (아래 "로컬 모델 사용법"의 스모크 테스트 필요)
+- 이하는 2026-09-14 기준 기록 (경위는 [`docs/HISTORY.md`](docs/HISTORY.md))
 
 - 1~2단계 구현 완료. 실제 backend `coverage.json`(전체 커버리지 50.25%)으로 검증 —
   339개 갭(라인 250 + 브랜치 89) 추출, 함수/클래스 중첩 매핑과 스니펫 생성 정상 확인
@@ -66,7 +74,8 @@ python -m testgen.cli \
 - `--dry-run` : LLM 호출 없이 갭 추출 + 프롬프트 생성까지만 실행
 - `--kind line|branch|all` : 갭 종류 필터
 - `--file-contains <substr>` : 특정 파일/디렉터리만 처리
-- `--models claude` : 한쪽 모델만 호출
+- `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
+- `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
 - `--limit N` : 처리할 갭 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
@@ -74,3 +83,28 @@ python -m testgen.cli \
 - `output/gaps.json` — 추출된 갭 전체 목록
 - `output/prompts/<gap_id>.txt` — 갭별로 실제 전송한 프롬프트
 - `output/responses/<gap_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
+  + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
+
+### 로컬 모델 사용법 (무과금)
+
+```bash
+ollama pull <모델 태그>          # 예: Ornith 또는 qwen3 계열. 태그는 `ollama list`로 확인
+ollama serve                     # 이미 실행 중이면 생략
+
+python -m testgen.cli \
+  --coverage-json "../Test Develop Project/backend/coverage.json" \
+  --source-root "../Test Develop Project/backend" \
+  --models "local:<모델 A>,local:<모델 B>" \
+  --limit 3
+```
+
+- 서로 다른 계열의 로컬 모델 2개를 지정하면 무과금으로 듀얼 생성(교차검증용)이 된다.
+- 요청에 JSON 스키마(`response_format`)를 함께 보내 출력 형식을 강제한다.
+  런타임이 이를 지원하지 않으면 무시되고, 응답 검증 단계에서 형식 오류가 `PARSE FAIL`로 집계된다.
+- 로컬 CPU 추론은 느리므로 호출 타임아웃은 600초(`testgen/config.py`)이고, `--workers 1`부터 시작하길 권장.
+
+## 테스트
+
+```bash
+python -m unittest discover -s tests -t .
+```
