@@ -48,6 +48,23 @@ ollama ps                              # PROCESSOR 열이 "100% GPU"면 정상
 
 ## 4. 첫 실호출
 
+### 4-1. 이 PC에서 coverage.json 만들기 (필수)
+
+`coverage.json`은 테스트 실행 결과물이라 보통 git에 없다. 새 PC에서 대상 프로젝트를 받았다면 반드시 다시 만든다.
+복사해 왔더라도 대상 코드·테스트가 바뀌었으면 라인 번호가 어긋나므로 다시 만든다.
+
+```powershell
+cd "<대상 프로젝트>\backend"
+python -m venv .venv                          # 이 PC에 .venv가 없을 때만
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest pytest-cov   # 처음 한 번
+$env:GROQ_API_KEY = "dummy-key-for-coverage"  # PowerShell 창마다
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+`Coverage JSON written to file coverage.json`이 나오면 성공 (일부 테스트 실패는 무관). 오류는 README "문제 해결" 참고
+
+### 4-2. 테스트 케이스 생성
+
 ```powershell
 cd <Ai-testcase-generator 폴더>
 git pull
