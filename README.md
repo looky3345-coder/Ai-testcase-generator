@@ -81,7 +81,8 @@ python -m testgen.cli \
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
 
-- `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`)
+- `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`,
+  `never_called`: 테스트가 한 번도 호출하지 않은 함수, `dependencies`: 함수가 참조하는 모듈 수준 이름과 import 출처)
 - `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
 - `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
@@ -103,6 +104,37 @@ python -m testgen.cli \
 - 요청에 JSON 스키마(`response_format`)를 함께 보내 출력 형식을 강제한다.
   런타임이 이를 지원하지 않으면 무시되고, 응답 검증 단계에서 형식 오류가 `PARSE FAIL`로 집계된다.
 - 로컬 CPU 추론은 느리므로 호출 타임아웃은 600초(`testgen/config.py`)이고, `--workers 1`부터 시작하길 권장.
+
+## 문제 해결
+
+### coverage.json 생성 단계에서 `ImportError while loading conftest ... ModuleNotFoundError`
+
+이 도구가 아니라 **대상 프로젝트의 의존성이 현재 Python 환경에 없다**는 뜻이다
+(예: `No module named 'groq'`). 대상 프로젝트 폴더에서 그 프로젝트의 가상환경을 켜고 의존성을 설치한 뒤 다시 실행한다.
+
+```powershell
+cd <대상 프로젝트>\backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest pytest-cov
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+
+- 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
+- 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
+
+### coverage.json 생성 단계에서 `GroqError: The api_key client option must be set ...` (또는 다른 API 키 오류)
+
+대상 프로젝트가 모듈 import 시점에 외부 API 클라이언트를 만들면서 키를 요구하는 경우다.
+커버리지 측정에는 **가짜 키**를 환경변수로 넣는다 (실제 키는 API 호출 비용·비결정적 결과 때문에 권장하지 않음).
+
+```powershell
+$env:GROQ_API_KEY = "dummy-key-for-coverage"   # 현재 PowerShell 창에서만 유효
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+
+- 실제 API를 호출하는 테스트는 인증 오류로 실패할 수 있지만 `coverage.json`은 생성된다 (해당 경로는 미커버 갭으로 잡힘).
+- 대상 프로젝트에 `.env.example` 등이 있으면 다른 필수 환경변수도 확인한다.
 
 ## 테스트
 

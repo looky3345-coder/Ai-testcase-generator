@@ -31,7 +31,9 @@ from testgen.prompt_builder import build_prompt
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--coverage-json", required=True, type=Path, help="분석 대상 프로젝트의 coverage.json 경로")
+    parser.add_argument(
+        "--coverage-json", required=True, type=Path, help="분석 대상 프로젝트의 coverage.json 경로 (또는 그 파일이 있는 폴더)"
+    )
     parser.add_argument("--source-root", required=True, type=Path, help="coverage.json 안의 파일 경로가 상대경로로 기록된 기준 루트")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="결과 저장 위치 (기본: ai-testgen/output)")
     parser.add_argument("--framework-hint", default=None, help="LLM 프롬프트에 넣을 대상 프로젝트/테스트 프레임워크 설명")
@@ -68,14 +70,31 @@ def filter_targets(
     return filtered
 
 
+def resolve_coverage_json(path: Path) -> Path | None:
+    """--coverage-json에 폴더를 넘긴 경우 그 안의 coverage.json을 쓴다. 못 찾으면 None."""
+    if path.is_file():
+        return path
+    if path.is_dir() and (path / "coverage.json").is_file():
+        return path / "coverage.json"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    if not args.coverage_json.is_file():
-        print(f"[오류] coverage.json을 찾을 수 없습니다: {args.coverage_json}", file=sys.stderr)
-        print("먼저 대상 프로젝트에서 다음을 실행하세요:", file=sys.stderr)
+    coverage_json = resolve_coverage_json(args.coverage_json)
+    if coverage_json is None:
+        if args.coverage_json.is_dir():
+            print(f"[오류] 폴더 안에 coverage.json이 없습니다: {args.coverage_json}", file=sys.stderr)
+        else:
+            print(f"[오류] coverage.json을 찾을 수 없습니다: {args.coverage_json}", file=sys.stderr)
+        print("--coverage-json에는 coverage.json 파일 경로(또는 그 파일이 있는 폴더)를 넣으세요.", file=sys.stderr)
+        print("아직 만들지 않았다면 대상 프로젝트에서 다음을 실행하세요:", file=sys.stderr)
         print("  python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json", file=sys.stderr)
         return 1
+    if coverage_json != args.coverage_json:
+        print(f"  --coverage-json이 폴더라서 그 안의 파일을 사용합니다: {coverage_json}")
+    args.coverage_json = coverage_json
     if not args.source_root.is_dir():
         print(f"[오류] source-root 디렉터리가 없습니다: {args.source_root}", file=sys.stderr)
         return 1
@@ -86,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     total_gaps = sum(len(t.gaps) for t in all_targets)
     selected_gaps = sum(len(t.gaps) for t in targets)
     print(f"  전체 갭 {total_gaps}개 → 대상 함수 {len(all_targets)}개로 묶음")
+    if not all_targets:
+        print(
+            "  [주의] 추출된 갭이 없습니다. 커버리지가 100%가 아니라면 --source-root가 맞는지 확인하세요 "
+            "(coverage.json 안의 파일 경로, 예: app/main.py 가 source-root 기준으로 존재해야 함).",
+            file=sys.stderr,
+        )
     print(
         f"  그중 대상 {len(targets)}개(갭 {selected_gaps}개) 선택 "
         f"(kind={args.kind}, file_contains={args.file_contains}, limit={args.limit})"

@@ -31,6 +31,20 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
     gap_list = "\n".join(f"- {gap.describe()}" for gap in target.gaps)
     hint = framework_hint or _DEFAULT_FRAMEWORK_HINT
 
+    never_called = ""
+    if target.never_called:
+        never_called = (
+            "\n※ 이 함수는 현재 테스트 스위트에서 한 번도 호출되지 않았습니다. 호출만 해도 대부분의 라인이 실행되므로,"
+            "\n  함수 안의 조건문(if/try 등)의 양쪽 경로를 모두 지나도록 케이스를 나누세요.\n"
+        )
+    dependencies = ""
+    if target.dependencies:
+        dep_list = "\n".join(f"- {d}" for d in target.dependencies)
+        dependencies = f"""
+이 코드가 참조하는 모듈 수준 이름과 출처 (테스트에서 준비하거나 mock/patch할 후보):
+{dep_list}
+"""
+
     return f"""당신은 ISTQB 기법에 정통한 QA 테스트 설계 전문가입니다.
 아래는 pytest-cov 커버리지 리포트에서 발견된 미커버 코드 경로입니다.
 
@@ -39,7 +53,7 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
 
 미커버 항목 ({len(target.gaps)}개):
 {gap_list}
-
+{never_called}{dependencies}
 소스 ({scope}). 줄 앞 표시: '>>' 한 번도 실행되지 않은 라인, 'B>' 일부 분기만 실행된 조건/반복문:
 ```python
 {target.source}
@@ -55,6 +69,8 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
    - 경계값 분석(boundary_value_analysis): 미커버 경로로 들어가는 조건식의 경계, 경계-1, 경계+1 값 사용
 3. 이미 커버된 정상 경로만 실행하는 케이스는 제안하지 말고, 미커버 항목을 실행시키는 케이스만 제안하세요.
 4. 각 케이스가 어떤 미커버 항목을 겨냥하는지 target_lines에 명시하세요. 모든 미커버 항목이 최소 1개 케이스로 다뤄져야 합니다.
+5. DB, 외부 API, 현재 시각, 네트워크처럼 실행 환경에 따라 결과가 달라지는 의존성은 mock/patch로 고정하세요.
+   무엇을 어떤 값으로 대체하는지 preconditions에 구체적으로 쓰고, expected에는 그 설정에서 결정되는 구체적인 결과를 쓰세요.
 
 출력 형식: 다른 설명 없이 아래 구조를 따르는 JSON 객체만 출력하세요.
 {_OUTPUT_SCHEMA}

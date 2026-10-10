@@ -7,6 +7,68 @@
   "show_contexts": false
  },
  "files": {
+  "app/ai_service.py": {
+   "executed_lines": [
+    1,
+    2,
+    4,
+    6,
+    7,
+    10,
+    14
+   ],
+   "missing_lines": [
+    11,
+    15,
+    17,
+    18,
+    20,
+    21,
+    23,
+    24,
+    25,
+    26,
+    30,
+    31,
+    32,
+    33,
+    34
+   ],
+   "excluded_lines": [],
+   "executed_branches": [],
+   "missing_branches": [
+    [
+     15,
+     -14
+    ],
+    [
+     15,
+     17
+    ],
+    [
+     24,
+     25
+    ],
+    [
+     24,
+     26
+    ]
+   ]
+  },
+  "app/clients.py": {
+   "executed_lines": [
+    1,
+    2,
+    3,
+    6
+   ],
+   "missing_lines": [
+    7
+   ],
+   "excluded_lines": [],
+   "executed_branches": [],
+   "missing_branches": []
+  },
   "app/service.py": {
    "executed_lines": [
     1,
