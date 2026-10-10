@@ -229,8 +229,16 @@ def main(argv: list[str] | None = None) -> int:
                 r["unparsed"] += 1
             else:
                 status = f"OK, 케이스 {len(response.test_cases)}개"
-                if response.parse_errors:
-                    status += f" (버림 {len(response.parse_errors)}건)"
+                dropped = sum(e.startswith("케이스 #") for e in response.parse_errors)
+                duplicates = sum(e.startswith("중복 의심") for e in response.parse_errors)
+                salvaged = any("완성된 케이스" in e for e in response.parse_errors)
+                notes = [
+                    *([f"버림 {dropped}건"] if dropped else []),
+                    *([f"중복 의심 {duplicates}건"] if duplicates else []),
+                    *(["잘린 응답에서 회수"] if salvaged else []),
+                ]
+                if notes:
+                    status += f" ({', '.join(notes)})"
                 r["ok"] += 1
                 r["cases"] += len(response.test_cases)
             if response.ok and response.finish_reason == "length":

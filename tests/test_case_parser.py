@@ -70,6 +70,14 @@ class ParseTestCasesTest(unittest.TestCase):
         self.assertEqual(result.test_cases, [])
         self.assertTrue(result.errors)
 
+    def test_duplicate_cases_flagged_not_dropped(self):
+        # 실제 사례: TC-6/TC-8이 같은 입력·사전조건
+        dup = dict(VALID_CASE, id="TC-2", description="다른 설명", target_lines="99")
+        other = dict(VALID_CASE, id="TC-3", input="count=99")
+        result = parse_test_cases(json.dumps({"test_cases": [VALID_CASE, dup, other]}))
+        self.assertEqual(len(result.test_cases), 3)
+        self.assertEqual(result.errors, ["중복 의심: TC-2의 입력·사전조건이 TC-1와 같음"])
+
     def test_no_json(self):
         result = parse_test_cases("JSON이 없는 응답")
         self.assertEqual(result.test_cases, [])

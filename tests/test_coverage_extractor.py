@@ -171,6 +171,8 @@ class DecisionPointsTest(unittest.TestCase):
         prompt = build_prompt(grade)
         self.assertIn("분기·조건 체크리스트 (4개", prompt)
         self.assertIn("side_effect", prompt)
+        self.assertIn("호출 인자 검증", prompt)
+        self.assertIn("정상 완료 쪽 케이스를 최소 1개", prompt)
 
     def test_signature_excludes_inner_decorator(self):
         targets = {t.qualname: t for t in extract_targets(SAMPLE / "coverage.json", SAMPLE)}

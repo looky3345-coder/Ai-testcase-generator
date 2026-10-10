@@ -139,4 +139,19 @@ def parse_test_cases(raw: str) -> ParseResult:
             result.errors.extend(case_errors)
         else:
             result.test_cases.append(case)
+    result.errors.extend(_duplicate_warnings(result.test_cases))
     return result
+
+
+def _duplicate_warnings(cases: list[dict]) -> list[str]:
+    """입력·사전조건이 완전히 같은 케이스를 알려준다 (케이스는 버리지 않음).
+    실제 사례: TC-6/TC-8, TC-7/TC-9가 같은 입력·사전조건으로 다른 항목을 겨냥한다고 주장."""
+    seen: dict[tuple[str, str], str] = {}
+    warnings = []
+    for case in cases:
+        key = (" ".join(case["input"].split()), " ".join(case["preconditions"].split()))
+        if key in seen:
+            warnings.append(f"중복 의심: {case['id']}의 입력·사전조건이 {seen[key]}와 같음")
+        else:
+            seen[key] = case["id"]
+    return warnings
