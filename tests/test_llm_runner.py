@@ -1,0 +1,101 @@
+import json
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from testgen.case_parser import TEST_CASES_SCHEMA
+from testgen.llm_runner import CLIBackend, OpenAICompatBackend, build_backends
+
+
+class _FakeOpenAIServer:
+    """/v1/chat/completions 를 흉내 내는 로컬 HTTP 서버. 받은 요청 본문을 기록한다."""
+
+    def __init__(self, status=200, content='{"test_cases": []}', raw_body=None):
+        self.requests = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers["Content-Length"])
+                outer.requests.append({"path": self.path, "body": json.loads(self.rfile.read(length))})
+                body = raw_body if raw_body is not None else json.dumps(
+                    {"choices": [{"message": {"role": "assistant", "content": content}}]}
+                )
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def log_message(self, *args):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class OpenAICompatBackendTest(unittest.TestCase):
+    def test_success_sends_schema_and_returns_content(self):
+        fake = _FakeOpenAIServer(content='{"test_cases": [1]}')
+        self.addCleanup(fake.close)
+        backend = OpenAICompatBackend("local-m", fake.base_url, "qwen3:8b", response_schema=TEST_CASES_SCHEMA)
+
+        response = backend.run("t1", "프롬프트")
+
+        self.assertTrue(response.ok, response.error)
+        self.assertEqual(response.raw_output, '{"test_cases": [1]}')
+        request = fake.requests[0]
+        self.assertEqual(request["path"], "/v1/chat/completions")
+        self.assertEqual(request["body"]["model"], "qwen3:8b")
+        self.assertEqual(request["body"]["messages"][0]["content"], "프롬프트")
+        self.assertEqual(request["body"]["response_format"]["json_schema"]["schema"], TEST_CASES_SCHEMA)
+
+    def test_http_error(self):
+        fake = _FakeOpenAIServer(status=404, raw_body='{"error": "model not found"}')
+        self.addCleanup(fake.close)
+        response = OpenAICompatBackend("local-m", fake.base_url, "nope").run("t1", "p")
+        self.assertFalse(response.ok)
+        self.assertIn("HTTP 404", response.error)
+        self.assertIn("model not found", response.error)
+
+    def test_unexpected_body(self):
+        fake = _FakeOpenAIServer(raw_body='{"foo": 1}')
+        self.addCleanup(fake.close)
+        response = OpenAICompatBackend("local-m", fake.base_url, "m").run("t1", "p")
+        self.assertFalse(response.ok)
+        self.assertIn("형식", response.error)
+
+    def test_connection_refused(self):
+        fake = _FakeOpenAIServer()
+        url = fake.base_url
+        fake.close()
+        response = OpenAICompatBackend("local-m", url, "m").run("t1", "p")
+        self.assertFalse(response.ok)
+        self.assertIn("연결 실패", response.error)
+
+
+class BuildBackendsTest(unittest.TestCase):
+    def test_mixed_specs(self):
+        backends = build_backends(["claude", "local:qwen3:8b", "local:ornith-9b"], "http://x/v1")
+        self.assertIsInstance(backends[0], CLIBackend)
+        self.assertEqual(backends[1].model, "qwen3:8b")
+        self.assertEqual(backends[1].name, "local-qwen3_8b")  # 파일명용으로 ':' 치환
+        self.assertEqual(backends[2].name, "local-ornith-9b")
+
+    def test_unknown_spec(self):
+        with self.assertRaises(ValueError):
+            build_backends(["gpt"], "http://x/v1")
+        with self.assertRaises(ValueError):
+            build_backends(["local:"], "http://x/v1")
+
+    def test_duplicate_spec(self):
+        with self.assertRaises(ValueError):
+            build_backends(["local:m", "local:m"], "http://x/v1")
+
+
+if __name__ == "__main__":
+    unittest.main()
