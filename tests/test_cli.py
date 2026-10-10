@@ -81,6 +81,27 @@ class CasesCsvTest(unittest.TestCase):
         self.assertEqual(rows[0]["description"], "경계 확인")
 
 
+class SwallowedQuoteTest(unittest.TestCase):
+    def test_trailing_backslash_hint(self):
+        # PowerShell에서 --coverage-json "C:\\x\\backend\\" --source-root "..." 를 입력했을 때 Python이 받는 값
+        broken = ["--coverage-json", 'C:\\x\\backend" --source-root C:\\x\\backend"', "--dry-run"]
+        code = None
+        err = io.StringIO()
+        with redirect_stderr(err), redirect_stdout(io.StringIO()):
+            try:
+                main(broken)
+            except SystemExit as exc:  # argparse가 --source-root 누락으로 종료
+                code = exc.code
+        self.assertEqual(code, 2)
+        self.assertIn("경로 끝의", err.getvalue())
+
+    def test_no_hint_for_normal_args(self):
+        from testgen.cli import warn_swallowed_quote
+
+        with redirect_stderr(io.StringIO()):
+            self.assertFalse(warn_swallowed_quote(["--coverage-json", "C:\\x\\backend", "--dry-run"]))
+
+
 class FilterTargetsTest(unittest.TestCase):
     def test_qualname_filter(self):
         from testgen.cli import filter_targets

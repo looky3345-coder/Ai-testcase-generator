@@ -129,6 +129,12 @@ python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
 - 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
 - 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
 
+### `error: the following arguments are required: --source-root` (분명히 입력했는데)
+
+Windows에서 경로를 `"C:\...\backend\"`처럼 **끝에 역슬래시를 붙여 따옴표로 감싸면** `\"`가 따옴표 문자로 해석되어
+뒤의 옵션까지 한 값으로 붙어 버린다. **경로 끝의 `\`를 지운다** (`"C:\...\backend"`).
+도구가 이 경우를 감지하면 `[주의] 인자 값 안에 따옴표(")가 들어 있습니다` 안내를 먼저 출력한다.
+
 ### `.\.venv\Scripts\Activate.ps1` (가상환경 켜기)가 실행되지 않음
 
 | 오류 메시지 | 조치 |

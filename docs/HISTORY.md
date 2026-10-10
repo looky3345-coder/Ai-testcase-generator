@@ -2,6 +2,33 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 집 데스크톱 dry-run 성공 + 경로 끝 역슬래시 오류 감지
+
+**배경**
+- 집 데스크톱에서 dry-run 실행 시 `error: the following arguments are required: --source-root` 발생.
+  사용자는 `--source-root`를 분명히 입력한 상태
+
+**과정**
+- 원인: 경로를 `"...\backend\"`처럼 끝에 `\`를 붙여 따옴표로 감쌈. Windows의 명령줄 분해 규칙상 `\"`는 따옴표 문자로 해석되어
+  따옴표가 닫히지 않고, 뒤의 `--source-root ...`까지 `--coverage-json`의 값 하나로 합쳐짐
+- argparse 오류 메시지만으로는 원인을 알 수 없으므로, 인자 값 안에 `"`가 남아 있으면 이 실수로 보고 안내를 먼저 출력하도록 함
+- 구현 직후 확인에서 안내는 stderr의 맨 앞에 출력되고(이후 argparse usage/오류) `tail`로 보면 안 보였음 → `head`로 확인
+- 사용자가 `\`를 지우고 재실행 → **성공**
+
+**변경**
+- `testgen/cli.py`: `warn_swallowed_quote()` — 인자 값에 `"`가 있으면 원인과 수정 예시를 출력 (파싱 자체는 그대로)
+- `tests/test_cli.py`: 깨진 인자 재현 시 안내 출력·정상 인자에는 미출력 테스트 2개
+- `README.md` "문제 해결"에 해당 오류 항목 추가
+
+**검증**
+- 단위 테스트 39개 통과 (신규 2개)
+- **집 데스크톱 실제 결과**: `--coverage-json`에 폴더 지정 → 내부 coverage.json 자동 사용 확인
+  (직전 "폴더 처리 개선"의 미검증 항목 해소). 갭 131개 → 대상 107개로 회사 PC와 동일, `--qualname analyze_work_hours`로 1개 선택 확인
+- 따옴표 안내 문구 자체는 사용자 PC에서 아직 보지 않음 (이 기능 추가 전에 사용자가 직접 고침)
+
+**다음**
+- `output/prompts/` 의 patch 경로 문구 확인 → 첫 실호출 (`--models local:ornith15-9b --workers 1`)
+
 ## 2026-10-10 — README에 가상환경 활성화 실패 대응 추가
 
 **배경**

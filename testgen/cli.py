@@ -56,7 +56,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=4, help="LLM 호출 동시 실행 개수")
     parser.add_argument("--dry-run", action="store_true", help="갭 추출과 프롬프트 생성만 하고 LLM은 호출하지 않음")
+    warn_swallowed_quote(sys.argv[1:] if argv is None else argv)
     return parser.parse_args(argv)
+
+
+def warn_swallowed_quote(argv: list[str]) -> bool:
+    """Windows에서 `"C:\\path\\"`처럼 경로 끝에 역슬래시를 붙이면 `\\"`가 따옴표 문자로 해석되어
+    뒤의 옵션까지 한 값으로 붙어 버린다 (예: --source-root 누락 오류). 그 흔적(값 안의 따옴표)을 찾아 원인을 알려준다."""
+    for value in argv:
+        if '"' in value:
+            print(
+                "[주의] 인자 값 안에 따옴표(\")가 들어 있습니다. 경로 끝의 역슬래시(\\) 때문에 따옴표가 닫히지 않은 것으로 보입니다.\n"
+                '       경로 끝의 \\ 를 지우세요. 예: "C:\\...\\backend\\" → "C:\\...\\backend"\n'
+                f"       문제의 값: {value[:120]}",
+                file=sys.stderr,
+            )
+            return True
+    return False
 
 
 def filter_targets(
