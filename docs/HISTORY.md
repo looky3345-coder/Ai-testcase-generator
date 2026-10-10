@@ -2,6 +2,37 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 두 번째 실호출: 답 본문이 빈 응답(추론형 모델 thinking) → thinking 기본 끄기
+
+**배경**
+- 별칭 문제 해결 후 재실행: `PARSE FAIL (응답에서 JSON을 찾을 수 없습니다)` (46.0초)
+- 사용자가 공유한 응답 파일: `"raw_output": ""` — 모델은 46초 동안 생성했지만 답(content)이 비어 있음
+
+**과정**
+- 가설 3개(① `<think>` 블록에 섞인 중괄호 ② 출력 잘림 ③ 본문 비어 있음)를 세우고, 응답 파일을 받기 전에
+  ①②③이 모두 드러나도록 진단 기능부터 보강 (`<think>` 제거, `finish_reason` 기록, 원본 HTTP 응답 보관)
+- 응답 파일로 ③ 확정. 조사 결과: Ollama에서 추론형 모델은 사고 과정을 별도 `reasoning` 필드로 내보내고 `content`가 비는 사례가
+  보고되어 있고, OpenAI 호환 API에 `reasoning_effort: "none"`을 보내면 thinking이 꺼진다는 보고가 있음
+- 주의 사항(조사): Qwen3.5 계열은 thinking을 끄면 Ollama의 `format`(JSON 강제)이 무시된다는 Ollama 이슈(#14645)가 있음.
+  Ornith-1.5는 Qwen3.5 기반이라 해당될 수 있음 → 형식 강제가 안 돼도 응답 후 파싱·스키마 검증이 있으므로 우선 진행
+- 테스트 작성 중 **직전 진단 보강 코드의 버그 발견**: `finish_reason=length` 표시를 if/elif/else 사슬 가운데 끼워 넣어
+  파싱 실패가 "OK, 케이스 0개"로도 표시되고 성공·실패에 이중 집계됨. 커밋 전이라 사용자에게 배포되지는 않음 → 수정 + 회귀 테스트
+
+**변경**
+- `testgen/llm_runner.py`: `thinking` 옵션(기본 False → `reasoning_effort: "none"` 전송), 응답의 `reasoning`/`finish_reason`/원본 본문 보관
+- `testgen/case_parser.py`: `<think>…</think>` 제거, 빈 본문·닫히지 않은 `<think>`(잘림)를 구분한 오류 메시지
+- `testgen/models.py`: `LLMResponse.finish_reason`, `raw_response`, `reasoning`
+- `testgen/cli.py`: `--local-thinking off|on`(기본 off), "본문은 비고 reasoning만 있음" 안내, 잘림 표시(상태 분류 버그 수정 포함)
+- 문서: README 옵션, 설치 가이드 문제 해결표 3행
+
+**검증**
+- 단위 테스트 49개 통과 (신규 8개: think 제거/잘림/빈 본문, thinking 끄기 요청값, reasoning 보관, 실제 사례 재현(content 빈 응답),
+  잘림 표시와 이중 집계 회귀)
+- **미검증**: Ornith-1.5-9B가 `reasoning_effort: "none"`으로 실제 thinking을 끄는지, 끈 상태에서 JSON을 지키는지 — 사용자 재실행 필요
+
+**다음**
+- 재실행 결과에 따라: 성공 → 케이스 품질 검토 / 형식 이탈 → Ollama 네이티브 API(`think`, `format`, `num_ctx`) 백엔드 검토
+
 ## 2026-10-10 — 첫 실호출: Ollama 연결 성공, 모델 이름 불일치(404) → 호출 전 모델 확인 추가
 
 **배경**

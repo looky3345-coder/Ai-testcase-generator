@@ -93,6 +93,7 @@ class OpenAICompatBackend(LLMBackend):
         response_schema: dict | None = None,
         api_key: str | None = None,
         temperature: float = 0.2,
+        thinking: bool = False,
     ):
         self.name = name
         self.base_url = base_url.rstrip("/")
@@ -102,6 +103,9 @@ class OpenAICompatBackend(LLMBackend):
         self.response_schema = response_schema
         self.api_key = api_key
         self.temperature = temperature
+        # 추론형 모델(Ornith/Qwen 계열 등)은 Ollama에서 사고 과정을 별도 `reasoning` 필드로 내보내고
+        # 정작 `content`가 비는 경우가 있다 (실제 사례: 46초 생성 후 content 빈 응답). 기본은 사고 과정을 끈다.
+        self.thinking = thinking
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -143,6 +147,9 @@ class OpenAICompatBackend(LLMBackend):
             "temperature": self.temperature,
             "stream": False,
         }
+        if not self.thinking:
+            # Ollama의 OpenAI 호환 API는 reasoning_effort "none"을 사고 과정 끄기로 처리한다
+            body["reasoning_effort"] = "none"
         if self.response_schema is not None:
             # 지원 런타임에서는 문법 제약 디코딩으로 스키마를 벗어난 출력 자체가 나오지 않는다
             body["response_format"] = {
@@ -187,8 +194,10 @@ class OpenAICompatBackend(LLMBackend):
             return fail(f"{self.timeout}초 타임아웃")
 
         try:
-            content = json.loads(body)["choices"][0]["message"]["content"]
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            choice = json.loads(body)["choices"][0]
+            content = choice["message"].get("content")
+            reasoning = choice["message"].get("reasoning") or choice["message"].get("reasoning_content") or ""
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
             return fail("응답 형식이 OpenAI chat completions 형식이 아닙니다", body)
 
         return LLMResponse(
@@ -199,6 +208,11 @@ class OpenAICompatBackend(LLMBackend):
             error=None,
             elapsed_sec=time.monotonic() - start,
             command=command,
+            # "length"면 출력/컨텍스트 한도로 응답이 잘린 것
+            finish_reason=choice.get("finish_reason"),
+            # 본문이 비었거나 파싱이 안 될 때 원인(별도 reasoning 필드 등)을 볼 수 있도록 원본 HTTP 응답도 보관
+            raw_response=body,
+            reasoning=reasoning,
         )
 
 
@@ -212,6 +226,7 @@ def build_backends(
     local_base_url: str,
     response_schema: dict | None = None,
     local_api_key: str | None = None,
+    local_thinking: bool = False,
 ) -> list[LLMBackend]:
     """`--models` 항목(claude, codex, local:<모델명>)을 백엔드 객체로 만든다. 잘못된 항목은 ValueError."""
     backends: list[LLMBackend] = []
@@ -227,6 +242,7 @@ def build_backends(
                     model,
                     response_schema=response_schema,
                     api_key=local_api_key,
+                    thinking=local_thinking,
                 )
             )
         else:

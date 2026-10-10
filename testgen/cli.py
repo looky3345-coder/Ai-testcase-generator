@@ -54,6 +54,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_LOCAL_BASE_URL,
         help="local:<모델명>이 호출할 OpenAI 호환 API 기준 URL (기본: Ollama, 환경변수 TESTGEN_LOCAL_BASE_URL)",
     )
+    parser.add_argument(
+        "--local-thinking",
+        choices=["off", "on"],
+        default="off",
+        help="로컬 추론형 모델의 사고 과정(thinking). 기본 off: 켜면 느리고, 답 본문이 빈 채로 오는 경우가 있음. "
+        "Ollama 외 런타임이 reasoning_effort 값을 거부하면 on으로 두세요",
+    )
     parser.add_argument("--workers", type=int, default=4, help="LLM 호출 동시 실행 개수")
     parser.add_argument("--dry-run", action="store_true", help="갭 추출과 프롬프트 생성만 하고 LLM은 호출하지 않음")
     warn_swallowed_quote(sys.argv[1:] if argv is None else argv)
@@ -170,7 +177,9 @@ def main(argv: list[str] | None = None) -> int:
 
     model_specs = [m.strip() for m in args.models.split(",") if m.strip()]
     try:
-        runners = build_backends(model_specs, args.local_base_url, TEST_CASES_SCHEMA, LOCAL_API_KEY)
+        runners = build_backends(
+            model_specs, args.local_base_url, TEST_CASES_SCHEMA, LOCAL_API_KEY, args.local_thinking == "on"
+        )
     except ValueError as exc:
         print(f"[오류] {exc}", file=sys.stderr)
         return 1
@@ -212,6 +221,11 @@ def main(argv: list[str] | None = None) -> int:
                 r["fail"] += 1
             elif not response.test_cases:
                 status = f"PARSE FAIL ({'; '.join(response.parse_errors[:2])})"
+                if not response.raw_output.strip() and response.reasoning:
+                    status += (
+                        f" — 답 본문은 비었고 사고 과정(reasoning, {len(response.reasoning)}자)만 있음."
+                        " --local-thinking off 상태인지 확인하세요"
+                    )
                 r["unparsed"] += 1
             else:
                 status = f"OK, 케이스 {len(response.test_cases)}개"
@@ -219,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
                     status += f" (버림 {len(response.parse_errors)}건)"
                 r["ok"] += 1
                 r["cases"] += len(response.test_cases)
+            if response.ok and response.finish_reason == "length":
+                status += " [응답이 길이 한도로 잘림: finish_reason=length]"
             print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({response.elapsed_sec:.1f}s)")
 
     print("\n=== 요약 ===")

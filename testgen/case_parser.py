@@ -35,6 +35,8 @@ TEST_CASES_SCHEMA = {
 }
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+# 추론형 모델(Qwen 계열 기반 등)이 답 앞에 붙이는 사고 과정 블록
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 @dataclass
@@ -45,7 +47,11 @@ class ParseResult:
 
 def _load_json(raw: str):
     """원문에서 첫 JSON 값을 찾아 로드한다. 못 찾으면 ValueError."""
-    text = raw.strip()
+    text = _THINK_RE.sub("", raw).strip()
+    if not text:
+        raise ValueError("모델 응답 본문이 비어 있습니다" + (" (사고 과정 <think>만 있고 답이 없음)" if raw.strip() else ""))
+    if re.match(r"<think>", text, re.IGNORECASE):
+        raise ValueError("사고 과정(<think>)이 닫히기 전에 응답이 끝났습니다 — 출력이 잘렸을 가능성")
     fenced = _FENCE_RE.search(text)
     if fenced:
         text = fenced.group(1).strip()

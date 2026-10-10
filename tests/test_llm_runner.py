@@ -66,6 +66,30 @@ class OpenAICompatBackendTest(unittest.TestCase):
         self.assertEqual(request["body"]["messages"][0]["content"], "프롬프트")
         self.assertEqual(request["body"]["response_format"]["json_schema"]["schema"], TEST_CASES_SCHEMA)
 
+    def test_finish_reason_and_raw_response_kept(self):
+        body = json.dumps({"choices": [{"message": {"content": None, "reasoning": "생각"}, "finish_reason": "length"}]})
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        response = OpenAICompatBackend("local-m", fake.base_url, "m").run("t1", "p")
+        self.assertTrue(response.ok)
+        self.assertEqual(response.raw_output, "")
+        self.assertEqual(response.finish_reason, "length")
+        self.assertIn("reasoning", response.raw_response)
+
+    def test_thinking_off_by_default_and_reasoning_captured(self):
+        body = json.dumps({"choices": [{"message": {"content": "", "reasoning": "긴 사고 과정"}, "finish_reason": "stop"}]})
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        response = OpenAICompatBackend("local-m", fake.base_url, "m").run("t1", "p")
+        self.assertEqual(fake.requests[0]["body"]["reasoning_effort"], "none")
+        self.assertEqual(response.reasoning, "긴 사고 과정")
+
+    def test_thinking_on_omits_reasoning_effort(self):
+        fake = _FakeOpenAIServer()
+        self.addCleanup(fake.close)
+        OpenAICompatBackend("local-m", fake.base_url, "m", thinking=True).run("t1", "p")
+        self.assertNotIn("reasoning_effort", fake.requests[0]["body"])
+
     def test_http_error(self):
         fake = _FakeOpenAIServer(status=404, raw_body='{"error": "model not found"}')
         self.addCleanup(fake.close)

@@ -118,6 +118,49 @@ class ModelPreflightTest(unittest.TestCase):
         self.assertEqual(fake.requests, [])  # chat/completions 호출 0건
 
 
+class EmptyContentTest(unittest.TestCase):
+    def test_reasoning_only_response_explained(self):
+        # 실제 사례 재현: Ornith-1.5-9B가 46초 생성 후 content는 비고 reasoning만 반환
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        body = _json.dumps({"choices": [{"message": {"content": "", "reasoning": "생각" * 50}, "finish_reason": "stop"}]})
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, _ = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:m", "--local-base-url", fake.base_url, "--qualname", "grade",
+                "--local-thinking", "on",
+            )
+            saved = _json.loads(next((Path(tmp) / "responses").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertIn("사고 과정(reasoning, 100자)만 있음", out)
+        self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)  # 성공·실패 이중 집계 회귀 방지
+        self.assertEqual(saved["finish_reason"], "stop")
+        self.assertIn("reasoning", saved["raw_response"])
+
+
+class TruncatedResponseTest(unittest.TestCase):
+    def test_length_finish_reason_flagged_once(self):
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        body = _json.dumps({"choices": [{"message": {"content": '{"test_cases": ['}, "finish_reason": "length"}]})
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out, _ = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:m", "--local-base-url", fake.base_url, "--qualname", "grade",
+            )
+        self.assertIn("PARSE FAIL", out)
+        self.assertIn("finish_reason=length", out)
+        self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)
+
+
 class FilterTargetsTest(unittest.TestCase):
     def test_qualname_filter(self):
         from testgen.cli import filter_targets

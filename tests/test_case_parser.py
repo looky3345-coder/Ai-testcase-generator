@@ -42,6 +42,20 @@ class ParseTestCasesTest(unittest.TestCase):
         self.assertIn("technique", result.errors[0])
         self.assertIn("expected", result.errors[1])
 
+    def test_think_block_stripped(self):
+        # 사고 과정 안에 중괄호가 섞여 있어도 답 부분의 JSON을 읽어야 한다
+        raw = "<think>입력은 {score} 같은 형태... 경계는 {3}</think>\n" + json.dumps({"test_cases": [VALID_CASE]})
+        self.assertEqual(len(parse_test_cases(raw).test_cases), 1)
+
+    def test_unclosed_think_reports_truncation(self):
+        result = parse_test_cases("<think>아직 생각 중인데 출력이 끊김 {")
+        self.assertEqual(result.test_cases, [])
+        self.assertIn("잘렸을", result.errors[0])
+
+    def test_empty_and_think_only(self):
+        self.assertIn("비어 있습니다", parse_test_cases("").errors[0])
+        self.assertIn("<think>만", parse_test_cases("<think>생각만</think>").errors[0])
+
     def test_no_json(self):
         result = parse_test_cases("JSON이 없는 응답")
         self.assertEqual(result.test_cases, [])

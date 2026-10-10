@@ -78,6 +78,7 @@ python -m testgen.cli \
 - `--qualname <이름>` : 특정 함수만 처리 (예: `analyze_work_hours`, `Class.method`). LLM 실호출을 1개로 시작할 때 유용
 - `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
 - `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
+- `--local-thinking off|on` : 로컬 추론형 모델의 사고 과정 (기본 `off`. 켜면 느리고 답 본문이 빈 채로 올 수 있음)
 - `--limit N` : 처리할 대상 함수 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):

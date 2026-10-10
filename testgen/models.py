@@ -99,6 +99,9 @@ class LLMResponse:
     command: list[str] = field(default_factory=list)
     test_cases: list[dict] = field(default_factory=list)  # 스키마 검증을 통과한 케이스
     parse_errors: list[str] = field(default_factory=list)  # 파싱 실패/버린 케이스 사유
+    finish_reason: str | None = None  # OpenAI 호환 응답의 종료 사유 ("stop", "length" 등)
+    raw_response: str = ""  # 원본 HTTP 응답 본문 (진단용, OpenAI 호환 백엔드만)
+    reasoning: str = ""  # 추론형 모델이 별도 필드로 내보낸 사고 과정 (있을 때만)
 
     def to_dict(self) -> dict:
         return asdict(self)
