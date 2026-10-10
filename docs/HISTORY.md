@@ -2,6 +2,32 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 생성된 테스트 케이스 CSV 모아보기, 로컬 LLM 연결 일정 결정
+
+**배경**
+- 사용자 결정: 로컬 LLM(Ollama) 연결·첫 실호출은 **집 데스크톱에서 진행** (현재 환경은 설치 검토 필요). → 실호출 단계 보류
+- 사용자 질문: "생성된 테스트 케이스는 어디서 확인하나?"
+  → dry-run만 했으므로 아직 생성된 케이스는 없음. 실호출 시 `output/responses/<target_id>__<model>.json`의 `test_cases`에 저장되지만,
+  대상×모델마다 파일이 따로라 사람이 검토하기 불편함을 확인
+
+**과정**
+- 원래 계획 4단계("CSV 변환")의 일부를 앞당겨, 검토용으로 전체 케이스를 CSV 하나로 펼치기로 함
+- 사용자가 Windows 엑셀로 열 것이므로 한글 깨짐 방지를 위해 UTF-8 BOM(`utf-8-sig`)으로 저장
+- 정렬: 파일 → 함수 위치 → 모델 순 (같은 함수에 대한 두 모델의 케이스가 붙어 있어 비교하기 쉽게)
+
+**변경**
+- `testgen/report.py` (신규): `write_cases_csv()` — 열: file, function, target_id, model, case_id, technique, priority,
+  target_lines, description, preconditions, input, expected
+- `testgen/cli.py`: LLM 실행 후 `output/test_cases.csv` 저장 및 경로 출력 (dry-run에서는 생성하지 않음)
+
+**검증**
+- 단위 테스트 34개 통과 (신규 1개: 가짜 서버로 실행 → CSV 생성, BOM, 내용 확인)
+- **미검증**: 실제 엑셀에서 열었을 때 표시 (사용자 PC), 실제 LLM 응답으로 만든 CSV
+
+**다음**
+- (집 데스크톱) Ollama 설치 → `--qualname analyze_work_hours --models local:<모델>`로 첫 실호출 → `test_cases.csv` 검토
+- 그 전에 현재 PC에서 `--qualname ... --dry-run`으로 patch 경로 추정 결과 확인 가능
+
 ## 2026-10-10 — 함수 지정 실행(`--qualname`) + mock patch 경로 추정
 
 **배경**

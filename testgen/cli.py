@@ -27,6 +27,7 @@ from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
 from testgen.models import TestTarget
 from testgen.prompt_builder import build_prompt
+from testgen.report import write_cases_csv
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -176,12 +177,14 @@ def main(argv: list[str] | None = None) -> int:
             response.parse_errors = parsed.errors
         out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        return response
+        return target, response
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [pool.submit(_run_job, job) for job in jobs]
+        finished = []
         for i, future in enumerate(as_completed(futures), start=1):
-            response = future.result()
+            target, response = future.result()
+            finished.append((target, response))
             r = results[response.model]
             if not response.ok:
                 status = f"FAIL ({response.error})"
@@ -202,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         r = results[name]
         print(f"  {name}: 성공 {r['ok']}건 (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건")
     print(f"응답 파일 저장 위치: {responses_dir}")
+    cases_csv = output_dir / "test_cases.csv"
+    written = write_cases_csv(finished, cases_csv)
+    print(f"생성된 테스트 케이스 {written}개 모아보기 (엑셀로 열기): {cases_csv}")
     return 0
 
 

@@ -88,6 +88,8 @@ python -m testgen.cli \
 - `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
 - `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
+- `output/test_cases.csv` — **생성된 테스트 케이스 전체 모아보기** (한 줄에 케이스 하나, 엑셀로 바로 열림).
+  LLM 실행 시에만 생성되며 dry-run에서는 만들어지지 않음
 
 ### 로컬 모델 사용법 (무과금)
 
