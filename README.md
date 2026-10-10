@@ -78,17 +78,21 @@ python -m testgen.cli \
 - `--qualname <이름>` : 특정 함수만 처리 (예: `analyze_work_hours`, `Class.method`). LLM 실호출을 1개로 시작할 때 유용
 - `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
 - `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
+- `--resume` : 같은 프롬프트로 이미 성공한 대상×모델은 다시 호출하지 않고 재사용 (`--limit`을 늘려 가며 나눠 실행할 때)
+- `--local-thinking off|on` : 로컬 추론형 모델의 사고 과정 (기본 `off`. 켜면 느리고 답 본문이 빈 채로 올 수 있음)
 - `--limit N` : 처리할 대상 함수 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
 
 - `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`,
   `never_called`: 테스트가 한 번도 호출하지 않은 함수, `dependencies`: 함수가 참조하는 모듈 수준 이름과 import 출처,
-  `module_name`: 테스트 실행 시 import되는 모듈 이름 추정 — mock.patch 경로용)
+  `module_name`: 테스트 실행 시 import되는 모듈 이름 추정 — mock.patch 경로용,
+  `decision_points`: 함수 안 분기 지점 체크리스트(경계값 후보 포함))
 - `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
 - `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
 - `output/test_cases.csv` — **생성된 테스트 케이스 전체 모아보기** (한 줄에 케이스 하나, 엑셀로 바로 열림).
+  공통 사전조건(`common_preconditions`)과 중복 의심 표시(`review_note`) 열 포함.
   LLM 실행 시에만 생성되며 dry-run에서는 만들어지지 않음
 
 ### 로컬 모델 사용법 (무과금)
@@ -128,6 +132,22 @@ python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
 
 - 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
 - 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
+
+### `error: the following arguments are required: --source-root` (분명히 입력했는데)
+
+Windows에서 경로를 `"C:\...\backend\"`처럼 **끝에 역슬래시를 붙여 따옴표로 감싸면** `\"`가 따옴표 문자로 해석되어
+뒤의 옵션까지 한 값으로 붙어 버린다. **경로 끝의 `\`를 지운다** (`"C:\...\backend"`).
+도구가 이 경우를 감지하면 `[주의] 인자 값 안에 따옴표(")가 들어 있습니다` 안내를 먼저 출력한다.
+
+### `.\.venv\Scripts\Activate.ps1` (가상환경 켜기)가 실행되지 않음
+
+| 오류 메시지 | 조치 |
+|---|---|
+| "이 시스템에서 스크립트를 실행할 수 없으므로…" | `Set-ExecutionPolicy -Scope Process Bypass` 후 다시 실행 (현재 창에만 적용) |
+| "…용어가 cmdlet, 함수… 이름으로 인식되지 않습니다" | `.venv`가 없거나 위치가 `backend`가 아님 → `cd`로 이동, 없으면 `python -m venv .venv` |
+| (cmd 창인 경우) | `.venv\Scripts\activate.bat` |
+
+켜지 않고 `.\.venv\Scripts\python.exe -m pytest ...`처럼 가상환경의 Python을 직접 지정해도 결과는 같다.
 
 ### coverage.json 생성 단계에서 `GroqError: The api_key client option must be set ...` (또는 다른 API 키 오류)
 

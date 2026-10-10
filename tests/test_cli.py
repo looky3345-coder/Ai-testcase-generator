@@ -61,7 +61,8 @@ class CasesCsvTest(unittest.TestCase):
             "target_lines": "14->15", "preconditions": "", "input": "score=101",
             "expected": "ValueError", "priority": "high",
         }
-        fake = _FakeOpenAIServer(content=_json.dumps({"test_cases": [case]}))
+        duplicate = dict(case, id="TC-2", description="같은 입력")
+        fake = _FakeOpenAIServer(content=_json.dumps({"common_preconditions": "공통 mock", "test_cases": [case, duplicate]}))
         self.addCleanup(fake.close)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -75,10 +76,147 @@ class CasesCsvTest(unittest.TestCase):
             self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))  # 엑셀 한글 표시용 BOM
             with (out / "test_cases.csv").open(encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
-        self.assertEqual(len(rows), 1)
+        self.assertIn("OK, 케이스 2개 (중복 의심 1건)", stdout)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["function"], "Grader.grade")
         self.assertEqual(rows[0]["model"], "local-m")
         self.assertEqual(rows[0]["description"], "경계 확인")
+        self.assertEqual(rows[0]["review_note"], "")
+        self.assertEqual(rows[0]["common_preconditions"], "공통 mock")
+        self.assertIn("중복 의심", rows[1]["review_note"])
+
+
+class SwallowedQuoteTest(unittest.TestCase):
+    def test_trailing_backslash_hint(self):
+        # PowerShell에서 --coverage-json "C:\\x\\backend\\" --source-root "..." 를 입력했을 때 Python이 받는 값
+        broken = ["--coverage-json", 'C:\\x\\backend" --source-root C:\\x\\backend"', "--dry-run"]
+        code = None
+        err = io.StringIO()
+        with redirect_stderr(err), redirect_stdout(io.StringIO()):
+            try:
+                main(broken)
+            except SystemExit as exc:  # argparse가 --source-root 누락으로 종료
+                code = exc.code
+        self.assertEqual(code, 2)
+        self.assertIn("경로 끝의", err.getvalue())
+
+    def test_no_hint_for_normal_args(self):
+        from testgen.cli import warn_swallowed_quote
+
+        with redirect_stderr(io.StringIO()):
+            self.assertFalse(warn_swallowed_quote(["--coverage-json", "C:\\x\\backend", "--dry-run"]))
+
+
+class ModelPreflightTest(unittest.TestCase):
+    def test_wrong_model_stops_before_any_call(self):
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        fake = _FakeOpenAIServer(models=["hf.co/x/y:Q4_K_M"])
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, err = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:ornith15-9b", "--local-base-url", fake.base_url,
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("hf.co/x/y:Q4_K_M", err)
+        self.assertEqual(fake.requests, [])  # chat/completions 호출 0건
+
+
+class EmptyContentTest(unittest.TestCase):
+    def test_reasoning_only_response_explained(self):
+        # 실제 사례 재현: Ornith-1.5-9B가 46초 생성 후 content는 비고 reasoning만 반환
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        body = _json.dumps({"choices": [{"message": {"content": "", "reasoning": "생각" * 50}, "finish_reason": "stop"}]})
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, _ = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:m", "--local-base-url", fake.base_url, "--qualname", "grade",
+                "--local-thinking", "on",
+            )
+            saved = _json.loads(next((Path(tmp) / "responses").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertIn("사고 과정(reasoning, 100자)만 있음", out)
+        self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)  # 성공·실패 이중 집계 회귀 방지
+        self.assertEqual(saved["finish_reason"], "stop")
+        self.assertIn("reasoning", saved["raw_response"])
+
+
+class TruncatedResponseTest(unittest.TestCase):
+    def test_length_finish_reason_flagged_once(self):
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        body = _json.dumps({
+            "choices": [{"message": {"content": '{"test_cases": ['}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 2600, "completion_tokens": 1496},
+        })
+        fake = _FakeOpenAIServer(raw_body=body)
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            _, out, _ = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", tmp,
+                "--models", "local:m", "--local-base-url", fake.base_url, "--qualname", "grade",
+            )
+        self.assertIn("PARSE FAIL", out)
+        self.assertIn("finish_reason=length", out)
+        self.assertIn("입력 2600 + 출력 1496 = 4096 토큰", out)
+        self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)
+
+
+class ResumeTest(unittest.TestCase):
+    """나눠 실행: 이미 성공한 대상×모델은 --resume으로 다시 호출하지 않는다 (GPU 사용 시간 절약)."""
+
+    def _run_with(self, fake, out, *extra):
+        return _run(
+            "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", str(out),
+            "--models", "local:m", "--local-base-url", fake.base_url, "--workers", "1", *extra,
+        )
+
+    def test_resume_skips_done_and_continues_rest(self):
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        case = {
+            "id": "TC-1", "technique": "equivalence_partitioning", "description": "d", "target_lines": "1",
+            "preconditions": "", "input": "x", "expected": "y", "priority": "low",
+        }
+        fake = _FakeOpenAIServer(content=_json.dumps({"test_cases": [case]}))
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self._run_with(fake, out, "--limit", "2")
+            self.assertEqual(len(fake.requests), 2)
+
+            # 다음 묶음: 전체 대상(6개) 중 앞의 2개는 재사용, 나머지 4개만 호출
+            code, stdout, _ = self._run_with(fake, out, "--resume")
+            self.assertEqual(code, 0)
+            self.assertEqual(len(fake.requests), 2 + 4)
+            self.assertIn("그중 재사용 2건", stdout)
+            self.assertIn("이전 결과 재사용", stdout)
+            with (out / "test_cases.csv").open(encoding="utf-8-sig") as f:
+                self.assertEqual(sum(1 for _ in f) - 1, 6)  # 재사용 결과도 CSV에 포함
+
+            # 프롬프트가 바뀌면(--framework-hint 변경) 다시 호출
+            self._run_with(fake, out, "--resume", "--limit", "1", "--framework-hint", "다른 힌트")
+            self.assertEqual(len(fake.requests), 7)
+
+    def test_without_resume_calls_again(self):
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        fake = _FakeOpenAIServer()
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_with(fake, Path(tmp), "--limit", "1")
+            self._run_with(fake, Path(tmp), "--limit", "1")
+        self.assertEqual(len(fake.requests), 2)
 
 
 class FilterTargetsTest(unittest.TestCase):

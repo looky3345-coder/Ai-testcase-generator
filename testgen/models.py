@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 
 
 def _short_hash(text: str) -> str:
@@ -63,6 +63,8 @@ class TestTarget:
     # 함수가 참조하는 모듈 수준 이름과 출처 (예: "get_kst_now: from utils import get_kst_now") — mock 후보
     dependencies: list[str] = field(default_factory=list)
     module_name: str | None = None  # 테스트 실행 시 import되는 모듈 이름 추정 (mock.patch 경로용)
+    # 함수 안의 분기 지점 체크리스트 (if/while/삼항/`x or 기본값`/try/for, 경계값 후보 포함)
+    decision_points: list[str] = field(default_factory=list)
 
     @property
     def target_id(self) -> str:
@@ -81,6 +83,7 @@ class TestTarget:
             "never_called": self.never_called,
             "dependencies": self.dependencies,
             "module_name": self.module_name,
+            "decision_points": self.decision_points,
             "source": self.source,
             "gaps": [g.to_dict() for g in self.gaps],
         }
@@ -99,6 +102,21 @@ class LLMResponse:
     command: list[str] = field(default_factory=list)
     test_cases: list[dict] = field(default_factory=list)  # 스키마 검증을 통과한 케이스
     parse_errors: list[str] = field(default_factory=list)  # 파싱 실패/버린 케이스 사유
+    common_preconditions: str = ""  # 모든 케이스에 공통인 사전조건 (모델 출력)
+    finish_reason: str | None = None  # OpenAI 호환 응답의 종료 사유 ("stop", "length" 등)
+    raw_response: str = ""  # 원본 HTTP 응답 본문 (진단용, OpenAI 호환 백엔드만)
+    reasoning: str = ""  # 추론형 모델이 별도 필드로 내보낸 사고 과정 (있을 때만)
+    prompt_tokens: int | None = None  # 입력 토큰 수 (런타임이 알려줄 때)
+    completion_tokens: int | None = None  # 출력 토큰 수
+    prompt_sha: str = ""  # 보낸 프롬프트의 해시 — --resume에서 같은 프롬프트로 이미 성공한 결과인지 판단
+    reused: bool = False  # --resume으로 이전 결과를 재사용했는지 (파일에는 저장하지 않음)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LLMResponse":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("reused")
+        return data

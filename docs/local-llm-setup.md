@@ -48,6 +48,23 @@ ollama ps                              # PROCESSOR 열이 "100% GPU"면 정상
 
 ## 4. 첫 실호출
 
+### 4-1. 이 PC에서 coverage.json 만들기 (필수)
+
+`coverage.json`은 테스트 실행 결과물이라 보통 git에 없다. 새 PC에서 대상 프로젝트를 받았다면 반드시 다시 만든다.
+복사해 왔더라도 대상 코드·테스트가 바뀌었으면 라인 번호가 어긋나므로 다시 만든다.
+
+```powershell
+cd "<대상 프로젝트>\backend"
+python -m venv .venv                          # 이 PC에 .venv가 없을 때만
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest pytest-cov   # 처음 한 번
+$env:GROQ_API_KEY = "dummy-key-for-coverage"  # PowerShell 창마다
+python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+```
+`Coverage JSON written to file coverage.json`이 나오면 성공 (일부 테스트 실패는 무관). 오류는 README "문제 해결" 참고
+
+### 4-2. 테스트 케이스 생성
+
 ```powershell
 cd <Ai-testcase-generator 폴더>
 git pull
@@ -59,6 +76,21 @@ python -m testgen.cli `
 ```
 - 결과: `output\test_cases.csv` (엑셀), 원본 응답: `output\responses\`
 - 공유할 것: 콘솔 요약 줄, `test_cases.csv`, 소요 시간
+
+### 4-3. 전체 실행을 나눠서 하기
+
+함수 하나에 수십 초~1분이 걸리므로 107개를 한 번에 돌리지 말고 나눠 실행한다.
+`--resume`을 붙이면 같은 프롬프트로 이미 성공한 함수는 다시 호출하지 않는다.
+
+```powershell
+# 1회차: 앞에서부터 20개
+python.exe -m testgen.cli <경로 옵션들> --models "local:ornith15-9b-16k" --workers 1 --limit 20 --resume
+# 2회차(다른 날): 40개까지 — 앞 20개는 재사용, 21~40번째만 새로 호출
+python.exe -m testgen.cli <경로 옵션들> --models "local:ornith15-9b-16k" --workers 1 --limit 40 --resume
+```
+- `--file-contains services`처럼 폴더 단위로 나눠도 된다
+- 프롬프트가 바뀐 함수(도구 업데이트, `--framework-hint` 변경 등)는 자동으로 다시 호출된다
+- `test_cases.csv`에는 재사용한 결과까지 모두 들어간다
 
 ## 5. GPU 부담
 
@@ -76,5 +108,23 @@ python -m testgen.cli `
 |---|---|
 | `연결 실패 ... ollama serve` | Ollama가 실행 중이 아님 → 시작 메뉴에서 Ollama 실행 |
 | `HTTP 404 ... model not found` | `--models local:<태그>`의 태그가 `ollama list`와 다름 |
-| `PARSE FAIL` 다수 | 모델이 JSON 형식을 지키지 못함 → 원본 응답 JSON의 `raw_output` 공유 |
+| `PARSE FAIL` + "답 본문은 비었고 사고 과정(reasoning)만 있음" | 추론형 모델이 thinking에 시간을 다 쓰고 답(content)을 비움 → `--local-thinking off`(기본값) 확인 |
+| `[응답이 길이 한도로 잘림: finish_reason=length, 입력 + 출력 = N 토큰]` | N이 4096/8192 근처면 Ollama 컨텍스트 한도 → 아래 "컨텍스트 한도 늘리기" |
+| `PARSE FAIL` (그 외) | 모델이 JSON 형식을 지키지 못함 → 응답 JSON의 `raw_output`, `raw_response` 공유 |
 | `600초 타임아웃` | CPU로 돌고 있을 가능성 → `ollama ps` 확인 |
+
+## 컨텍스트 한도 늘리기 (응답이 잘릴 때)
+
+환경변수(`OLLAMA_CONTEXT_LENGTH`)는 Ollama 재시작이 필요하고 적용 여부가 잘 안 보인다.
+**모델 자체에 한도를 넣은 별칭**을 만드는 방법이 더 확실하다.
+
+```powershell
+@"
+FROM ornith15-9b
+PARAMETER num_ctx 16384
+"@ | Set-Content -Encoding ascii Modelfile.ornith16k
+ollama create ornith15-9b-16k -f Modelfile.ornith16k
+ollama show ornith15-9b-16k      # parameters에 num_ctx 16384 확인
+```
+이후 `--models "local:ornith15-9b-16k"`로 실행. 9B Q4 + 16K 컨텍스트는 VRAM 16GB 안에 들어갈 것으로 예상
+(`ollama ps`에서 100% GPU인지 확인, CPU로 넘어가면 12288 등으로 낮춤).

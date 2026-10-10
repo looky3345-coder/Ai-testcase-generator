@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 from testgen.models import LLMResponse, TestTarget
@@ -21,16 +22,27 @@ CSV_COLUMNS = [
     "priority",
     "target_lines",
     "description",
+    "common_preconditions",
     "preconditions",
     "input",
     "expected",
+    "review_note",
 ]
+
+# 케이스 객체에서 그대로 가져오는 열
+CASE_COLUMNS = ["technique", "priority", "target_lines", "description", "preconditions", "input", "expected"]
 
 
 def write_cases_csv(results: list[tuple[TestTarget, LLMResponse]], path: Path) -> int:
     """케이스를 파일·함수 위치·모델 순으로 정렬해 저장하고, 저장한 케이스 수를 돌려준다."""
     rows = []
     for target, response in sorted(results, key=lambda r: (r[0].file, r[0].start_line, r[1].model)):
+        # 파서가 남긴 케이스별 경고(예: "중복 의심: TC-8의 …")를 해당 케이스 줄에 붙인다
+        notes: dict[str, list[str]] = {}
+        for message in response.parse_errors:
+            match = re.match(r"중복 의심: (\S+)의", message)
+            if match:
+                notes.setdefault(match.group(1), []).append(message)
         for case in response.test_cases:
             rows.append(
                 {
@@ -39,7 +51,9 @@ def write_cases_csv(results: list[tuple[TestTarget, LLMResponse]], path: Path) -
                     "target_id": target.target_id,
                     "model": response.model,
                     "case_id": case["id"],
-                    **{key: case[key] for key in CSV_COLUMNS[5:]},
+                    "common_preconditions": response.common_preconditions,
+                    **{key: case[key] for key in CASE_COLUMNS},
+                    "review_note": " / ".join(notes.get(case["id"], [])),
                 }
             )
     with path.open("w", encoding="utf-8-sig", newline="") as f:

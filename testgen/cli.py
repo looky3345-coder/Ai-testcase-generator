@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from dataclasses import replace
@@ -25,7 +26,7 @@ from testgen.case_parser import TEST_CASES_SCHEMA, parse_test_cases
 from testgen.config import DEFAULT_LOCAL_BASE_URL, DEFAULT_OUTPUT_DIR, LOCAL_API_KEY
 from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
-from testgen.models import TestTarget
+from testgen.models import LLMResponse, TestTarget
 from testgen.prompt_builder import build_prompt
 from testgen.report import write_cases_csv
 
@@ -54,9 +55,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_LOCAL_BASE_URL,
         help="local:<모델명>이 호출할 OpenAI 호환 API 기준 URL (기본: Ollama, 환경변수 TESTGEN_LOCAL_BASE_URL)",
     )
+    parser.add_argument(
+        "--local-thinking",
+        choices=["off", "on"],
+        default="off",
+        help="로컬 추론형 모델의 사고 과정(thinking). 기본 off: 켜면 느리고, 답 본문이 빈 채로 오는 경우가 있음. "
+        "Ollama 외 런타임이 reasoning_effort 값을 거부하면 on으로 두세요",
+    )
     parser.add_argument("--workers", type=int, default=4, help="LLM 호출 동시 실행 개수")
     parser.add_argument("--dry-run", action="store_true", help="갭 추출과 프롬프트 생성만 하고 LLM은 호출하지 않음")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="같은 프롬프트로 이미 성공한 대상×모델은 다시 호출하지 않고 이전 결과를 재사용 "
+        "(--limit 등으로 나눠 실행할 때 사용. 프롬프트가 바뀐 대상은 다시 호출)",
+    )
+    warn_swallowed_quote(sys.argv[1:] if argv is None else argv)
     return parser.parse_args(argv)
+
+
+def warn_swallowed_quote(argv: list[str]) -> bool:
+    """Windows에서 `"C:\\path\\"`처럼 경로 끝에 역슬래시를 붙이면 `\\"`가 따옴표 문자로 해석되어
+    뒤의 옵션까지 한 값으로 붙어 버린다 (예: --source-root 누락 오류). 그 흔적(값 안의 따옴표)을 찾아 원인을 알려준다."""
+    for value in argv:
+        if '"' in value:
+            print(
+                "[주의] 인자 값 안에 따옴표(\")가 들어 있습니다. 경로 끝의 역슬래시(\\) 때문에 따옴표가 닫히지 않은 것으로 보입니다.\n"
+                '       경로 끝의 \\ 를 지우세요. 예: "C:\\...\\backend\\" → "C:\\...\\backend"\n'
+                f"       문제의 값: {value[:120]}",
+                file=sys.stderr,
+            )
+            return True
+    return False
 
 
 def filter_targets(
@@ -154,11 +184,18 @@ def main(argv: list[str] | None = None) -> int:
 
     model_specs = [m.strip() for m in args.models.split(",") if m.strip()]
     try:
-        runners = build_backends(model_specs, args.local_base_url, TEST_CASES_SCHEMA, LOCAL_API_KEY)
+        runners = build_backends(
+            model_specs, args.local_base_url, TEST_CASES_SCHEMA, LOCAL_API_KEY, args.local_thinking == "on"
+        )
     except ValueError as exc:
         print(f"[오류] {exc}", file=sys.stderr)
         return 1
     model_names = [runner.name for runner in runners]
+    for runner in runners:
+        problem = runner.check_model()
+        if problem:
+            print(f"[오류] {runner.name}: {problem}", file=sys.stderr)
+            return 1
 
     print(
         f"[2/2] 대상 {len(targets)}개 x 모델 {len(runners)}개 = {len(targets) * len(runners)}건 "
@@ -166,16 +203,37 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     jobs = [(runner, target) for target in targets for runner in runners]
-    results = {name: {"ok": 0, "fail": 0, "unparsed": 0, "cases": 0} for name in model_names}
+    results = {name: {"ok": 0, "fail": 0, "unparsed": 0, "cases": 0, "reused": 0} for name in model_names}
+
+    def _previous_result(out_path: Path, prompt_sha: str) -> LLMResponse | None:
+        """같은 프롬프트로 케이스를 얻은 이전 결과가 있으면 돌려준다. 실패·파싱 실패·프롬프트 변경이면 None (다시 호출)."""
+        if not out_path.is_file():
+            return None
+        try:
+            previous = LLMResponse.from_dict(json.loads(out_path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if previous.ok and previous.test_cases and previous.prompt_sha == prompt_sha:
+            previous.reused = True
+            return previous
+        return None
 
     def _run_job(job):
         runner, target = job
-        response = runner.run(target.target_id, prompts[target.target_id])
+        prompt = prompts[target.target_id]
+        prompt_sha = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
+        out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
+        if args.resume:
+            previous = _previous_result(out_path, prompt_sha)
+            if previous is not None:
+                return target, previous
+        response = runner.run(target.target_id, prompt)
+        response.prompt_sha = prompt_sha
         if response.ok:
             parsed = parse_test_cases(response.raw_output)
             response.test_cases = parsed.test_cases
             response.parse_errors = parsed.errors
-        out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
+            response.common_preconditions = parsed.common_preconditions
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return target, response
 
@@ -186,24 +244,52 @@ def main(argv: list[str] | None = None) -> int:
             target, response = future.result()
             finished.append((target, response))
             r = results[response.model]
+            if response.reused:
+                r["reused"] += 1
             if not response.ok:
                 status = f"FAIL ({response.error})"
                 r["fail"] += 1
             elif not response.test_cases:
                 status = f"PARSE FAIL ({'; '.join(response.parse_errors[:2])})"
+                if not response.raw_output.strip() and response.reasoning:
+                    status += (
+                        f" — 답 본문은 비었고 사고 과정(reasoning, {len(response.reasoning)}자)만 있음."
+                        " --local-thinking off 상태인지 확인하세요"
+                    )
                 r["unparsed"] += 1
             else:
                 status = f"OK, 케이스 {len(response.test_cases)}개"
-                if response.parse_errors:
-                    status += f" (버림 {len(response.parse_errors)}건)"
+                dropped = sum(e.startswith("케이스 #") for e in response.parse_errors)
+                duplicates = sum(e.startswith("중복 의심") for e in response.parse_errors)
+                salvaged = any("완성된 케이스" in e for e in response.parse_errors)
+                notes = [
+                    *([f"버림 {dropped}건"] if dropped else []),
+                    *([f"중복 의심 {duplicates}건"] if duplicates else []),
+                    *(["잘린 응답에서 회수"] if salvaged else []),
+                ]
+                if notes:
+                    status += f" ({', '.join(notes)})"
                 r["ok"] += 1
                 r["cases"] += len(response.test_cases)
-            print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({response.elapsed_sec:.1f}s)")
+            if response.ok and response.finish_reason == "length":
+                status += " [응답이 길이 한도로 잘림: finish_reason=length"
+                if response.prompt_tokens is not None and response.completion_tokens is not None:
+                    total = response.prompt_tokens + response.completion_tokens
+                    status += (
+                        f", 입력 {response.prompt_tokens} + 출력 {response.completion_tokens} = {total} 토큰"
+                        " — 합계가 4096/8192 같은 값이면 런타임 컨텍스트 한도"
+                    )
+                status += "]"
+            timing = "이전 결과 재사용" if response.reused else f"{response.elapsed_sec:.1f}s"
+            print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({timing})")
 
     print("\n=== 요약 ===")
     for name in model_names:
         r = results[name]
-        print(f"  {name}: 성공 {r['ok']}건 (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건")
+        reused = f" (그중 재사용 {r['reused']}건)" if r["reused"] else ""
+        print(
+            f"  {name}: 성공 {r['ok']}건{reused} (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건"
+        )
     print(f"응답 파일 저장 위치: {responses_dir}")
     cases_csv = output_dir / "test_cases.csv"
     written = write_cases_csv(finished, cases_csv)
