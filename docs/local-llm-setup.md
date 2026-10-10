@@ -26,17 +26,21 @@
    [Environment]::SetEnvironmentVariable("OLLAMA_CONTEXT_LENGTH", "8192", "User")
    ```
    설정 후 Ollama를 완전히 종료(트레이 아이콘 → Quit)했다가 다시 실행
-4. 모델 받기 — 태그 이름은 https://ollama.com/library 에서 "ornith" 검색으로 확인 (1.5 버전인지 확인).
-   라이브러리에 없으면 Hugging Face의 GGUF를 직접 받을 수 있다: `ollama pull hf.co/<저장소>:Q4_K_M`
+4. 모델 받기 — `ollama list`는 **이미 받은 모델만** 보여준다. Ornith-1.5-9B는 Hugging Face GGUF로 받는 것이 확실하다
+   (Ollama 공식 라이브러리 등록 여부는 미확인: https://ollama.com/search?q=ornith).
    ```powershell
-   ollama pull <ornith-1.5 9B 태그>
+   ollama pull hf.co/bartowski/Ornith-1.5-9B-GGUF:Q4_K_M     # 약 5.9GB
+   ollama cp hf.co/bartowski/Ornith-1.5-9B-GGUF:Q4_K_M ornith15-9b   # 짧은 별칭 (선택)
    ollama list
    ```
+   - `bartowski/...`는 커뮤니티 변환본(널리 쓰이는 업로더). 공식 원본은 `ornith-ai/Ornith-1.5-9B`
+   - `hf.co/` 방식이 안 되면 Ollama를 최신 버전으로 업데이트
+   - Ollama가 이미 설치되어 있었다면 3번(컨텍스트 길이) 설정 후 반드시 완전 종료 → 재실행
 
 ## 3. GPU 사용 확인
 
 ```powershell
-ollama run <ornith-1.5 9B 태그> "안녕"     # 응답 확인 후 /bye
+ollama run ornith15-9b "안녕"     # 응답 확인 후 /bye
 ollama ps                              # PROCESSOR 열이 "100% GPU"면 정상
 ```
 - `100% CPU`로 나오면 GPU를 못 잡은 것 → 드라이버 업데이트, Ollama 재설치, docs.ollama.com/gpu 의 AMD 항목 확인
@@ -51,7 +55,7 @@ python -m testgen.cli `
   --coverage-json "<backend 폴더>" --source-root "<backend 폴더>" `
   --framework-hint "FastAPI + SQLAlchemy. tests/conftest.py의 DB 세션/TestClient 픽스처 사용" `
   --qualname analyze_work_hours `
-  --models "local:<ornith-1.5 9B 태그>" --workers 1
+  --models "local:ornith15-9b" --workers 1
 ```
 - 결과: `output\test_cases.csv` (엑셀), 원본 응답: `output\responses\`
 - 공유할 것: 콘솔 요약 줄, `test_cases.csv`, 소요 시간
