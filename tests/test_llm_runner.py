@@ -44,7 +44,7 @@ class OpenAICompatBackendTest(unittest.TestCase):
         self.addCleanup(fake.close)
         backend = OpenAICompatBackend("local-m", fake.base_url, "qwen3:8b", response_schema=TEST_CASES_SCHEMA)
 
-        response = backend.run("gap1", "프롬프트")
+        response = backend.run("t1", "프롬프트")
 
         self.assertTrue(response.ok, response.error)
         self.assertEqual(response.raw_output, '{"test_cases": [1]}')
@@ -57,7 +57,7 @@ class OpenAICompatBackendTest(unittest.TestCase):
     def test_http_error(self):
         fake = _FakeOpenAIServer(status=404, raw_body='{"error": "model not found"}')
         self.addCleanup(fake.close)
-        response = OpenAICompatBackend("local-m", fake.base_url, "nope").run("gap1", "p")
+        response = OpenAICompatBackend("local-m", fake.base_url, "nope").run("t1", "p")
         self.assertFalse(response.ok)
         self.assertIn("HTTP 404", response.error)
         self.assertIn("model not found", response.error)
@@ -65,7 +65,7 @@ class OpenAICompatBackendTest(unittest.TestCase):
     def test_unexpected_body(self):
         fake = _FakeOpenAIServer(raw_body='{"foo": 1}')
         self.addCleanup(fake.close)
-        response = OpenAICompatBackend("local-m", fake.base_url, "m").run("gap1", "p")
+        response = OpenAICompatBackend("local-m", fake.base_url, "m").run("t1", "p")
         self.assertFalse(response.ok)
         self.assertIn("형식", response.error)
 
@@ -73,7 +73,7 @@ class OpenAICompatBackendTest(unittest.TestCase):
         fake = _FakeOpenAIServer()
         url = fake.base_url
         fake.close()
-        response = OpenAICompatBackend("local-m", url, "m").run("gap1", "p")
+        response = OpenAICompatBackend("local-m", url, "m").run("t1", "p")
         self.assertFalse(response.ok)
         self.assertIn("연결 실패", response.error)
 

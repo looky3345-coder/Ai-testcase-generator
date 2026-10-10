@@ -7,8 +7,8 @@
 
 ## 전체 구조 (계획)
 
-1. **커버리지 갭 추출** — pytest-cov `coverage.json`에서 미커버 라인/분기를 찾아
-   해당 함수의 소스 스니펫과 함께 추출 (구현 완료: `testgen/coverage_extractor.py`)
+1. **커버리지 갭 추출** — pytest-cov `coverage.json`에서 미커버 라인/분기(방향 포함)를 찾아
+   **함수 단위로 묶고** 함수 전체 소스와 함께 추출 (구현 완료: `testgen/coverage_extractor.py`)
 2. **듀얼 LLM 테스트케이스 생성** — 두 모델에 ISTQB 기법(경계값 분석, 동등분할) 기반
    테스트 케이스를 요청하고, 응답 JSON을 스키마로 검증 (구현 완료: `testgen/prompt_builder.py`,
    `testgen/llm_runner.py`, `testgen/case_parser.py`, `testgen/cli.py`)
@@ -34,6 +34,7 @@
 
 ## 현재 상태 (2026-10-10)
 
+- 갭을 함수 단위로 묶어 LLM 호출 (함수 전체 + 분기 방향 제공). 출력이 `targets.json`으로 바뀜
 - 로컬 LLM 백엔드(OpenAI 호환 API) + JSON 스키마 출력 강제 + 응답 검증 추가.
   가짜 서버로 단위/통합 테스트 완료. **실제 로컬 모델로의 호출은 아직 미검증** (아래 "로컬 모델 사용법"의 스모크 테스트 필요)
 - 이하는 2026-09-14 기준 기록 (경위는 [`docs/HISTORY.md`](docs/HISTORY.md))
@@ -76,13 +77,13 @@ python -m testgen.cli \
 - `--file-contains <substr>` : 특정 파일/디렉터리만 처리
 - `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
 - `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
-- `--limit N` : 처리할 갭 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
+- `--limit N` : 처리할 대상 함수 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
 
-- `output/gaps.json` — 추출된 갭 전체 목록
-- `output/prompts/<gap_id>.txt` — 갭별로 실제 전송한 프롬프트
-- `output/responses/<gap_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
+- `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`)
+- `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
+- `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
 
 ### 로컬 모델 사용법 (무과금)

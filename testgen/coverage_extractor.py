@@ -1,7 +1,10 @@
-"""1단계: pytest-cov가 생성한 coverage.json에서 미커버 코드 경로를 추출한다.
+"""1단계: pytest-cov가 생성한 coverage.json에서 미커버 코드 경로를 추출해 함수 단위로 묶는다.
 
 분석 대상 프로젝트에서 먼저 coverage.json을 만들어야 한다. 예:
     python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
+
+LLM 호출 단위는 갭이 아니라 함수(TestTarget)다. 한 함수 안의 갭을 모아 한 번에 보내면
+호출 수가 줄고, 모델이 함수 전체 흐름(갭에 도달하는 조건식 = 경계값의 근거)을 볼 수 있다.
 """
 from __future__ import annotations
 
@@ -9,8 +12,8 @@ import ast
 import json
 from pathlib import Path
 
-from testgen.config import SNIPPET_CONTEXT_LINES
-from testgen.models import CoverageGap
+from testgen.config import LONG_FUNCTION_CONTEXT_LINES, MAX_FUNCTION_LINES, MODULE_CONTEXT_LINES
+from testgen.models import CoverageGap, TestTarget
 
 # 소스 자체가 아닌 것들(테스트 코드, 마이그레이션)은 갭 추출 대상에서 제외
 _EXCLUDED_PARTS = {"tests", "test", "migrations"}
@@ -60,12 +63,16 @@ def _enclosing_function(functions: list[tuple[str, ast.AST]], line: int):
     candidates = [
         (qualname, node)
         for qualname, node in functions
-        if node.lineno <= line <= (node.end_lineno or node.lineno)
+        if _def_start(node) <= line <= (node.end_lineno or node.lineno)
     ]
     if not candidates:
         return None, None
-    qualname, node = min(candidates, key=lambda item: item[1].end_lineno - item[1].lineno)
-    return qualname, node
+    return min(candidates, key=lambda item: item[1].end_lineno - _def_start(item[1]))
+
+
+def _def_start(node: ast.AST) -> int:
+    """데코레이터까지 포함한 함수 시작 라인. FastAPI 라우트 등은 데코레이터가 핵심 정보다."""
+    return min([node.lineno, *(d.lineno for d in node.decorator_list)])
 
 
 def _build_signature(source_lines: list[str], node: ast.AST) -> str:
@@ -75,56 +82,98 @@ def _build_signature(source_lines: list[str], node: ast.AST) -> str:
     return text or source_lines[node.lineno - 1].strip()
 
 
-def _build_snippet(
+def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for lo, hi in sorted(windows):
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _render_source(
     source_lines: list[str],
-    gap_start: int,
-    gap_end: int,
-    bound_start: int,
-    bound_end: int,
-) -> tuple[str, int]:
-    lo = max(bound_start, gap_start - SNIPPET_CONTEXT_LINES, 1)
-    hi = min(bound_end, gap_end + SNIPPET_CONTEXT_LINES, len(source_lines))
-    rows = []
-    for lineno in range(lo, hi + 1):
-        marker = ">>" if gap_start <= lineno <= gap_end else "  "
-        text = source_lines[lineno - 1].rstrip("\n")
-        rows.append(f"{marker} {lineno:>4}: {text}")
-    return "\n".join(rows), lo
+    windows: list[tuple[int, int]],
+    missing: set[int],
+    partial: set[int],
+) -> str:
+    """구간들을 라인 번호 + 마커와 함께 렌더링한다. 구간 사이는 '...'로 표시."""
+    blocks = []
+    for lo, hi in _merge_windows(windows):
+        rows = []
+        for lineno in range(lo, hi + 1):
+            marker = ">>" if lineno in missing else "B>" if lineno in partial else "  "
+            rows.append(f"{marker} {lineno:>4}: {source_lines[lineno - 1].rstrip()}")
+        blocks.append("\n".join(rows))
+    return "\n   ...\n".join(blocks)
 
 
-def _make_gap(
+def _gap_windows(gaps: list[CoverageGap], context: int, lo_bound: int, hi_bound: int) -> list[tuple[int, int]]:
+    return [
+        (max(lo_bound, g.start_line - context), min(hi_bound, g.end_line + context))
+        for g in gaps
+    ]
+
+
+def _module_windows(gaps: list[CoverageGap], function_spans: list[tuple[int, int]], n_lines: int) -> list[tuple[int, int]]:
+    """모듈 레벨 갭 주변 구간. 앞뒤 문맥이 다른 함수 본문으로 넘어가지 않도록 함수 경계에서 자른다."""
+    windows = []
+    for gap, (lo, hi) in zip(gaps, _gap_windows(gaps, MODULE_CONTEXT_LINES, 1, n_lines)):
+        for f_start, f_end in function_spans:
+            if f_end < gap.start_line and f_end >= lo:
+                lo = f_end + 1
+            if f_start > gap.end_line and f_start <= hi:
+                hi = f_start - 1
+        windows.append((lo, hi))
+    return windows
+
+
+def _build_target(
     rel_path: str,
-    kind: str,
-    start_line: int,
-    end_line: int,
+    qualname: str | None,
+    node: ast.AST | None,
+    gaps: list[CoverageGap],
     source_lines: list[str],
-    functions: list[tuple[str, ast.AST]],
-) -> CoverageGap:
-    qualname, node = _enclosing_function(functions, start_line)
-    if node is not None:
-        signature = _build_signature(source_lines, node)
-        bound_start, bound_end = node.lineno, node.end_lineno
+    missing: set[int],
+    partial: set[int],
+    function_spans: list[tuple[int, int]],
+) -> TestTarget:
+    if node is None:
+        # 모듈 레벨 코드: 파일 전체는 너무 크므로 갭 주변만
+        windows = _module_windows(gaps, function_spans, len(source_lines))
+        return TestTarget(
+            file=rel_path,
+            qualname=None,
+            start_line=gaps[0].start_line,
+            signature=None,
+            source=_render_source(source_lines, windows, missing, partial),
+            truncated=True,
+            gaps=gaps,
+        )
+
+    start, end = _def_start(node), node.end_lineno
+    truncated = end - start + 1 > MAX_FUNCTION_LINES
+    if truncated:
+        # 긴 함수: 데코레이터+시그니처 헤더는 항상 보여주고 나머지는 갭 주변만
+        header_end = node.body[0].lineno - 1 if node.body else node.lineno
+        windows = [(start, max(start, header_end))]
+        windows += _gap_windows(gaps, LONG_FUNCTION_CONTEXT_LINES, start, end)
     else:
-        signature = None
-        bound_start, bound_end = 1, len(source_lines)
+        windows = [(start, end)]
 
-    snippet, snippet_start = _build_snippet(
-        source_lines, start_line, end_line, bound_start, bound_end
-    )
-
-    return CoverageGap(
+    return TestTarget(
         file=rel_path,
-        kind=kind,
-        start_line=start_line,
-        end_line=end_line,
         qualname=qualname,
-        signature=signature,
-        snippet=snippet,
-        snippet_start_line=snippet_start,
+        start_line=start,
+        signature=_build_signature(source_lines, node),
+        source=_render_source(source_lines, windows, missing, partial),
+        truncated=truncated,
+        gaps=gaps,
     )
 
 
-def _gaps_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[CoverageGap]:
+def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[TestTarget]:
     if any(part in _EXCLUDED_PARTS for part in Path(rel_path).parts):
         return []
     if not abs_path.is_file():
@@ -138,30 +187,55 @@ def _gaps_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[Cov
         return []
     functions = list(_iter_functions(tree))
 
-    gaps: list[CoverageGap] = []
+    missing = set(file_report.get("missing_lines", []))
+    # 출발 라인이 아예 실행되지 않은 분기는 버린다: 그 라인을 실행시키는 게 먼저이고,
+    # 이미 line 갭으로 잡혀 있으므로 별도 갭으로 만들면 중복이다.
+    branch_arcs = sorted(
+        (src, dst) for src, dst in file_report.get("missing_branches", []) if src not in missing
+    )
+    partial = {src for src, _ in branch_arcs}
 
-    for start, end in _group_consecutive(file_report.get("missing_lines", [])):
-        gaps.append(_make_gap(rel_path, "line", start, end, source_lines, functions))
+    # 같은 이름의 함수(예: @property 와 @x.setter)가 있을 수 있어 이름이 아니라 노드 기준으로 묶는다
+    grouped: dict[int, tuple[str | None, ast.AST | None, list[CoverageGap]]] = {}
 
-    branch_lines = sorted({pair[0] for pair in file_report.get("missing_branches", [])})
-    for line in branch_lines:
-        gaps.append(_make_gap(rel_path, "branch", line, line, source_lines, functions))
+    def add(gap_line: int, make_gap) -> None:
+        qualname, node = _enclosing_function(functions, gap_line)
+        grouped.setdefault(id(node), (qualname, node, []))[2].append(make_gap(qualname))
 
-    return gaps
+    for start, end in _group_consecutive(list(missing)):
+        add(start, lambda q, s=start, e=end: CoverageGap(rel_path, "line", s, e, q))
+    for src, dst in branch_arcs:
+        add(src, lambda q, s=src, d=dst: CoverageGap(rel_path, "branch", s, s, q, branch_target=d))
+
+    # 최상위 함수/클래스의 범위. 모듈 레벨 갭의 문맥이 이 안으로 넘어가지 않게 한다
+    function_spans = [
+        (_def_start(n), n.end_lineno)
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+
+    targets = []
+    for qualname, node, target_gaps in grouped.values():
+        target_gaps.sort(key=lambda g: (g.start_line, g.kind))
+        targets.append(
+            _build_target(rel_path, qualname, node, target_gaps, source_lines, missing, partial, function_spans)
+        )
+    targets.sort(key=lambda t: t.start_line)
+    return targets
 
 
-def extract_gaps(coverage_json_path: Path, source_root: Path) -> list[CoverageGap]:
-    """coverage.json을 읽어 파일 전체의 CoverageGap 목록을 만든다.
+def extract_targets(coverage_json_path: Path, source_root: Path) -> list[TestTarget]:
+    """coverage.json을 읽어 전체 파일의 TestTarget(함수 단위 갭 묶음) 목록을 만든다.
 
     coverage.json 안의 파일 경로는 source_root 기준 상대경로라고 가정한다
     (예: source_root=<target>/backend, "app/routers/attendance.py").
     """
     data = json.loads(Path(coverage_json_path).read_text(encoding="utf-8"))
-    all_gaps: list[CoverageGap] = []
+    targets: list[TestTarget] = []
 
     for raw_path, file_report in data.get("files", {}).items():
         rel_path = _to_posix(raw_path)
         abs_path = (source_root / raw_path).resolve()
-        all_gaps.extend(_gaps_for_file(rel_path, abs_path, file_report))
+        targets.extend(_targets_for_file(rel_path, abs_path, file_report))
 
-    return all_gaps
+    return targets

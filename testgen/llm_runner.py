@@ -22,7 +22,7 @@ from testgen.models import LLMResponse
 class LLMBackend:
     name: str
 
-    def run(self, gap_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str) -> LLMResponse:
         raise NotImplementedError
 
 
@@ -35,13 +35,13 @@ class CLIBackend(LLMBackend):
         self.command = [resolved or command[0], *command[1:]]
         self.timeout = timeout
 
-    def run(self, gap_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str) -> LLMResponse:
         start = time.monotonic()
 
         def fail(error: str, raw_output: str = "") -> LLMResponse:
             return LLMResponse(
                 model=self.name,
-                gap_id=gap_id,
+                target_id=target_id,
                 ok=False,
                 raw_output=raw_output,
                 error=error,
@@ -70,7 +70,7 @@ class CLIBackend(LLMBackend):
 
         return LLMResponse(
             model=self.name,
-            gap_id=gap_id,
+            target_id=target_id,
             ok=True,
             raw_output=proc.stdout or "",
             error=None,
@@ -113,14 +113,14 @@ class OpenAICompatBackend(LLMBackend):
             }
         return body
 
-    def run(self, gap_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str) -> LLMResponse:
         start = time.monotonic()
         command = ["POST", self.url, f"model={self.model}"]
 
         def fail(error: str, raw_output: str = "") -> LLMResponse:
             return LLMResponse(
                 model=self.name,
-                gap_id=gap_id,
+                target_id=target_id,
                 ok=False,
                 raw_output=raw_output,
                 error=error,
@@ -158,7 +158,7 @@ class OpenAICompatBackend(LLMBackend):
 
         return LLMResponse(
             model=self.name,
-            gap_id=gap_id,
+            target_id=target_id,
             ok=True,
             raw_output=content or "",
             error=None,

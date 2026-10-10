@@ -9,12 +9,13 @@ from pathlib import Path
 TOOL_ROOT = Path(__file__).resolve().parents[1]  # ai-testgen/
 
 DEFAULT_OUTPUT_DIR = TOOL_ROOT / "output"
-DEFAULT_GAPS_FILE = DEFAULT_OUTPUT_DIR / "gaps.json"
-DEFAULT_RESPONSES_DIR = DEFAULT_OUTPUT_DIR / "responses"
-DEFAULT_PROMPTS_DIR = DEFAULT_OUTPUT_DIR / "prompts"
 
-# 갭 하나의 소스 스니펫 앞뒤로 붙일 여유 라인 수
-SNIPPET_CONTEXT_LINES = 2
+# 프롬프트에 함수 전체를 넣는 최대 길이. 이보다 길면 헤더(데코레이터+시그니처)와 갭 주변만 넣는다
+MAX_FUNCTION_LINES = 120
+# 긴 함수를 잘라 보여줄 때 갭 앞뒤로 붙일 라인 수
+LONG_FUNCTION_CONTEXT_LINES = 8
+# 모듈 레벨(함수 밖) 갭 앞뒤로 붙일 라인 수
+MODULE_CONTEXT_LINES = 5
 
 # 유료 CLI 백엔드 호출 커맨드. 프롬프트는 stdin으로 전달한다.
 # - claude: `claude -p`가 표준 비대화형(print) 모드, stdin 프롬프트 지원

@@ -1,4 +1,4 @@
-"""AI 기반 테스트케이스 생성 파이프라인 진입점 (1단계: 갭 추출, 2단계: LLM 생성 요청).
+"""AI 기반 테스트케이스 생성 파이프라인 진입점 (1단계: 갭 추출·함수 단위 묶기, 2단계: LLM 생성 요청).
 
 사용 예 (분석 대상 프로젝트에서 coverage.json을 먼저 만든 뒤):
     python -m testgen.cli \\
@@ -10,21 +10,22 @@
 무과금 로컬 모델(Ollama 등 OpenAI 호환 API)을 쓰려면 --models local:<모델명> 으로 지정한다:
     --models local:<ornith 모델 태그>,local:qwen3:8b
 
-갭 추출만 먼저 확인하고 싶으면 --dry-run 을 붙이면 LLM 호출 없이 gaps.json만 만든다.
+갭 추출만 먼저 확인하고 싶으면 --dry-run 을 붙이면 LLM 호출 없이 targets.json과 프롬프트만 만든다.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from testgen.case_parser import TEST_CASES_SCHEMA, parse_test_cases
 from testgen.config import DEFAULT_LOCAL_BASE_URL, DEFAULT_OUTPUT_DIR, LOCAL_API_KEY
-from testgen.coverage_extractor import extract_gaps
+from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
-from testgen.models import CoverageGap
+from testgen.models import TestTarget
 from testgen.prompt_builder import build_prompt
 
 
@@ -36,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--framework-hint", default=None, help="LLM 프롬프트에 넣을 대상 프로젝트/테스트 프레임워크 설명")
     parser.add_argument("--kind", choices=["all", "line", "branch"], default="all", help="추출할 갭 종류 필터")
     parser.add_argument("--file-contains", default=None, help="이 문자열을 포함하는 파일 경로의 갭만 처리")
-    parser.add_argument("--limit", type=int, default=None, help="처리할 갭 개수 상한 (LLM 호출 비용 제어용)")
+    parser.add_argument("--limit", type=int, default=None, help="처리할 대상 함수 개수 상한 (LLM 호출 비용 제어용)")
     parser.add_argument(
         "--models",
         default="claude,codex",
@@ -52,12 +53,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def filter_gaps(gaps: list[CoverageGap], kind: str, file_contains: str | None, limit: int | None) -> list[CoverageGap]:
-    filtered = gaps
+def filter_targets(
+    targets: list[TestTarget], kind: str, file_contains: str | None, limit: int | None
+) -> list[TestTarget]:
+    filtered = targets
     if kind != "all":
-        filtered = [g for g in filtered if g.kind == kind]
+        # 해당 종류의 갭만 남기고, 남은 갭이 없는 대상은 제외한다
+        filtered = [replace(t, gaps=[g for g in t.gaps if g.kind == kind]) for t in filtered]
+        filtered = [t for t in filtered if t.gaps]
     if file_contains:
-        filtered = [g for g in filtered if file_contains in g.file]
+        filtered = [t for t in filtered if file_contains in t.file]
     if limit is not None:
         filtered = filtered[:limit]
     return filtered
@@ -76,31 +81,37 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"[1/2] 커버리지 갭 추출 중... ({args.coverage_json})")
-    all_gaps = extract_gaps(args.coverage_json, args.source_root)
-    gaps = filter_gaps(all_gaps, args.kind, args.file_contains, args.limit)
-    print(f"  전체 갭 {len(all_gaps)}개 중 {len(gaps)}개 선택 (kind={args.kind}, file_contains={args.file_contains}, limit={args.limit})")
+    all_targets = extract_targets(args.coverage_json, args.source_root)
+    targets = filter_targets(all_targets, args.kind, args.file_contains, args.limit)
+    total_gaps = sum(len(t.gaps) for t in all_targets)
+    selected_gaps = sum(len(t.gaps) for t in targets)
+    print(f"  전체 갭 {total_gaps}개 → 대상 함수 {len(all_targets)}개로 묶음")
+    print(
+        f"  그중 대상 {len(targets)}개(갭 {selected_gaps}개) 선택 "
+        f"(kind={args.kind}, file_contains={args.file_contains}, limit={args.limit})"
+    )
 
     output_dir: Path = args.output_dir
-    gaps_file = output_dir / "gaps.json"
+    targets_file = output_dir / "targets.json"
     prompts_dir = output_dir / "prompts"
     responses_dir = output_dir / "responses"
     for d in (output_dir, prompts_dir, responses_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    gaps_file.write_text(
-        json.dumps([g.to_dict() for g in gaps], ensure_ascii=False, indent=2),
+    targets_file.write_text(
+        json.dumps([t.to_dict() for t in targets], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(f"  갭 목록 저장: {gaps_file}")
+    print(f"  대상 목록 저장: {targets_file}")
 
     prompts: dict[str, str] = {}
-    for gap in gaps:
-        prompt = build_prompt(gap, args.framework_hint)
-        prompts[gap.gap_id] = prompt
-        (prompts_dir / f"{gap.gap_id}.txt").write_text(prompt, encoding="utf-8")
+    for target in targets:
+        prompt = build_prompt(target, args.framework_hint)
+        prompts[target.target_id] = prompt
+        (prompts_dir / f"{target.target_id}.txt").write_text(prompt, encoding="utf-8")
 
-    if args.dry_run or not gaps:
-        print("dry-run 모드이거나 처리할 갭이 없어 LLM 호출을 건너뜁니다." if args.dry_run else "처리할 갭이 없습니다.")
+    if args.dry_run or not targets:
+        print("dry-run 모드라 LLM 호출을 건너뜁니다." if args.dry_run else "처리할 대상이 없습니다.")
         return 0
 
     model_specs = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -111,19 +122,22 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     model_names = [runner.name for runner in runners]
 
-    print(f"[2/2] {len(gaps)}개 갭 x {len(runners)}개 모델 = {len(gaps) * len(runners)}건 LLM 호출 시작 (workers={args.workers})")
+    print(
+        f"[2/2] 대상 {len(targets)}개 x 모델 {len(runners)}개 = {len(targets) * len(runners)}건 "
+        f"LLM 호출 시작 (workers={args.workers})"
+    )
 
-    jobs = [(runner, gap) for gap in gaps for runner in runners]
+    jobs = [(runner, target) for target in targets for runner in runners]
     results = {name: {"ok": 0, "fail": 0, "unparsed": 0, "cases": 0} for name in model_names}
 
     def _run_job(job):
-        runner, gap = job
-        response = runner.run(gap.gap_id, prompts[gap.gap_id])
+        runner, target = job
+        response = runner.run(target.target_id, prompts[target.target_id])
         if response.ok:
             parsed = parse_test_cases(response.raw_output)
             response.test_cases = parsed.test_cases
             response.parse_errors = parsed.errors
-        out_path = responses_dir / f"{gap.gap_id}__{runner.name}.json"
+        out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return response
 
@@ -144,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                     status += f" (버림 {len(response.parse_errors)}건)"
                 r["ok"] += 1
                 r["cases"] += len(response.test_cases)
-            print(f"  [{i}/{len(jobs)}] {response.model} / gap {response.gap_id}: {status} ({response.elapsed_sec:.1f}s)")
+            print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({response.elapsed_sec:.1f}s)")
 
     print("\n=== 요약 ===")
     for name in model_names:
