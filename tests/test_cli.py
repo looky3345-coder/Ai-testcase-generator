@@ -48,5 +48,18 @@ class CoverageJsonPathTest(unittest.TestCase):
         self.assertIn("--source-root가 맞는지", err)
 
 
+
+class FilterTargetsTest(unittest.TestCase):
+    def test_qualname_filter(self):
+        from testgen.cli import filter_targets
+        from testgen.coverage_extractor import extract_targets
+
+        targets = extract_targets(SAMPLE / "coverage.json", SAMPLE)
+        self.assertEqual([t.qualname for t in filter_targets(targets, "all", None, None, "grade")], ["Grader.grade"])
+        self.assertEqual(
+            [t.qualname for t in filter_targets(targets, "all", None, None, "Grader.unused")], ["Grader.unused"]
+        )
+        self.assertEqual(filter_targets(targets, "all", None, None, "nope"), [])
+
 if __name__ == "__main__":
     unittest.main()

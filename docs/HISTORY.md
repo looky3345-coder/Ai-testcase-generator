@@ -2,6 +2,34 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 함수 지정 실행(`--qualname`) + mock patch 경로 추정
+
+**배경**
+- 실제 프로젝트 전체 요약 결과 수신: **갭 267개 → 131개(-51%)**, 대상 함수 107개(변화 없음).
+  줄어든 136개는 같은 함수 안에서 빈 줄·여러 줄 문장 때문에 쪼개져 있던 조각 → 직전 개선의 전체 효과 확인
+- 첫 LLM 실호출을 `analyze_work_hours` 1개로 시작하려 했으나 `--limit`으로는 특정 함수를 고를 수 없음
+- 대상 프로젝트가 `app.` 없이 import(`from services.slack_service import ...`)해서 모델이 patch 경로를 틀릴 위험 (리뷰 6번)
+
+**과정**
+- patch 경로는 "파일의 절대 import가 가리키는 최상위 이름(services, utils, models …)이 어느 폴더 아래 실제로 있는가"로
+  기준 폴더를 고르는 방식으로 추정. 실제 프로젝트 구조(`backend/app/services`, `from utils.kst import ...`)를
+  임시 폴더로 재현해 `services.ai`로 추정되는 것을 확인, 패키지형 import(`from app.utils...`)는 `app.services.ai`로 추정
+- 추정이므로 프롬프트에 "추정됩니다"로 명시 (확정은 3단계 실제 실행으로)
+
+**변경**
+- `testgen/cli.py`: `--qualname <이름>` (전체 이름 `Class.method` 또는 마지막 이름 `method` 일치)
+- `testgen/coverage_extractor.py`: `_guess_module_name()`, `TestTarget.module_name` (targets.json에도 출력)
+- `testgen/prompt_builder.py`: 의존성 목록 아래에 patch 경로 예시 (`patch("services.ai_service.get_kst_now")` 형태)
+
+**검증**
+- 단위 테스트 33개 통과 (신규 4개: flat import/패키지 import/샘플 픽스처 모듈명 추정, `--qualname` 필터)
+- 재현 샘플 dry-run에서 `--qualname summarize`로 1개만 선택되고 patch 경로 문구가 출력되는 것 확인
+- **미검증**: 실제 프로젝트에서 `analyze_work_hours`의 추정 결과가 `services.ai_service`로 나오는지, 그 경로로 patch가 실제로 먹는지
+
+**다음**
+- 사용자 PC에서 `--qualname analyze_work_hours --dry-run`으로 patch 경로 문구 확인
+- 첫 LLM 실호출 모델 선택 (로컬 Ollama / claude -p) — 사용자 결정 대기
+
 ## 2026-10-10 — 프롬프트 개선 결과 실제 프로젝트에서 확인
 
 **배경**

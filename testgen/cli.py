@@ -39,6 +39,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--framework-hint", default=None, help="LLM 프롬프트에 넣을 대상 프로젝트/테스트 프레임워크 설명")
     parser.add_argument("--kind", choices=["all", "line", "branch"], default="all", help="추출할 갭 종류 필터")
     parser.add_argument("--file-contains", default=None, help="이 문자열을 포함하는 파일 경로의 갭만 처리")
+    parser.add_argument(
+        "--qualname", default=None, help="이 이름의 함수만 처리 (예: analyze_work_hours 또는 Class.method)"
+    )
     parser.add_argument("--limit", type=int, default=None, help="처리할 대상 함수 개수 상한 (LLM 호출 비용 제어용)")
     parser.add_argument(
         "--models",
@@ -56,9 +59,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def filter_targets(
-    targets: list[TestTarget], kind: str, file_contains: str | None, limit: int | None
+    targets: list[TestTarget],
+    kind: str,
+    file_contains: str | None,
+    limit: int | None,
+    qualname: str | None = None,
 ) -> list[TestTarget]:
     filtered = targets
+    if qualname:
+        # 전체 이름(Class.method) 또는 마지막 이름(method)이 일치하는 대상만
+        filtered = [
+            t for t in filtered if t.qualname and qualname in (t.qualname, t.qualname.rsplit(".", 1)[-1])
+        ]
     if kind != "all":
         # 해당 종류의 갭만 남기고, 남은 갭이 없는 대상은 제외한다
         filtered = [replace(t, gaps=[g for g in t.gaps if g.kind == kind]) for t in filtered]
@@ -101,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[1/2] 커버리지 갭 추출 중... ({args.coverage_json})")
     all_targets = extract_targets(args.coverage_json, args.source_root)
-    targets = filter_targets(all_targets, args.kind, args.file_contains, args.limit)
+    targets = filter_targets(all_targets, args.kind, args.file_contains, args.limit, args.qualname)
     total_gaps = sum(len(t.gaps) for t in all_targets)
     selected_gaps = sum(len(t.gaps) for t in targets)
     print(f"  전체 갭 {total_gaps}개 → 대상 함수 {len(all_targets)}개로 묶음")
@@ -113,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(
         f"  그중 대상 {len(targets)}개(갭 {selected_gaps}개) 선택 "
-        f"(kind={args.kind}, file_contains={args.file_contains}, limit={args.limit})"
+        f"(kind={args.kind}, file_contains={args.file_contains}, qualname={args.qualname}, limit={args.limit})"
     )
 
     output_dir: Path = args.output_dir

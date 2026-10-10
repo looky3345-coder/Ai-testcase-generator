@@ -91,6 +91,45 @@ class NeverCalledFunctionTest(_SampleTargets):
         self.assertIn("mock/patch", prompt)
 
 
+class ModuleNameGuessTest(unittest.TestCase):
+    def _extract(self, files: dict[str, str], target_file: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text, encoding="utf-8")
+            coverage = {"files": {target_file: {"missing_lines": [5], "executed_lines": [1, 4]}}}
+            (root / "coverage.json").write_text(json.dumps(coverage), encoding="utf-8")
+            (target,) = extract_targets(root / "coverage.json", root)
+        return target
+
+    def test_flat_imports_under_app(self):
+        # 실제 대상 프로젝트 방식: app/이 sys.path에 들어가 `from utils.kst import ...`로 import
+        target = self._extract(
+            {
+                "app/utils/kst.py": "def now(): pass\n",
+                "app/services/ai.py": "from utils.kst import now\nimport os\n\ndef f():\n    return now()\n",
+            },
+            "app/services/ai.py",
+        )
+        self.assertEqual(target.module_name, "services.ai")
+        self.assertIn('patch("services.ai.now")', build_prompt(target))
+
+    def test_package_imports_from_root(self):
+        target = self._extract(
+            {
+                "app/utils/kst.py": "def now(): pass\n",
+                "app/services/ai.py": "from app.utils.kst import now\nimport os\n\ndef f():\n    return now()\n",
+            },
+            "app/services/ai.py",
+        )
+        self.assertEqual(target.module_name, "app.services.ai")
+
+    def test_sample_fixture(self):
+        targets = extract_targets(SAMPLE / "coverage.json", SAMPLE)
+        self.assertEqual({t.module_name for t in targets if t.file == "app/ai_service.py"}, {"app.ai_service"})
+
+
 class LongFunctionTest(unittest.TestCase):
     def test_long_function_truncated_around_gaps(self):
         body = "\n".join(f"    x{i} = {i}" for i in range(200))

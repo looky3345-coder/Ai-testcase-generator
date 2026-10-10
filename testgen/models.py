@@ -62,6 +62,7 @@ class TestTarget:
     never_called: bool = False  # 테스트가 이 함수를 한 번도 호출하지 않음 (본문 실행 라인 0개)
     # 함수가 참조하는 모듈 수준 이름과 출처 (예: "get_kst_now: from utils import get_kst_now") — mock 후보
     dependencies: list[str] = field(default_factory=list)
+    module_name: str | None = None  # 테스트 실행 시 import되는 모듈 이름 추정 (mock.patch 경로용)
 
     @property
     def target_id(self) -> str:
@@ -79,6 +80,7 @@ class TestTarget:
             "truncated": self.truncated,
             "never_called": self.never_called,
             "dependencies": self.dependencies,
+            "module_name": self.module_name,
             "source": self.source,
             "gaps": [g.to_dict() for g in self.gaps],
         }
