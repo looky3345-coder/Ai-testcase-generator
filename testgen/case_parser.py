@@ -16,6 +16,9 @@ STRING_FIELDS = ("id", "description", "target_lines", "preconditions", "input", 
 TEST_CASES_SCHEMA = {
     "type": "object",
     "properties": {
+        # 모든 케이스에 공통인 사전조건(공통 mock 등). 케이스별 preconditions에는 차이만 쓴다.
+        # 실제 사례: "사전조건을 반복하지 말라"는 지시 때문에 일부 케이스에서 필요한 mock이 통째로 빠졌다.
+        "common_preconditions": {"type": "string"},
         "test_cases": {
             "type": "array",
             "items": {
@@ -30,7 +33,7 @@ TEST_CASES_SCHEMA = {
             },
         }
     },
-    "required": ["test_cases"],
+    "required": ["common_preconditions", "test_cases"],
     "additionalProperties": False,
 }
 
@@ -43,6 +46,7 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 class ParseResult:
     test_cases: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    common_preconditions: str = ""
 
 
 def _load_json(raw: str):
@@ -111,6 +115,17 @@ def _salvage_truncated(raw: str) -> list | None:
     return cases or None
 
 
+def _salvage_common(raw: str) -> str:
+    """잘린 응답에서도 앞부분의 common_preconditions 문자열은 온전할 수 있으므로 꺼낸다."""
+    match = re.search(r'"common_preconditions"\s*:\s*("(?:[^"\\]|\\.)*")', raw)
+    if not match:
+        return ""
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return ""
+
+
 def parse_test_cases(raw: str) -> ParseResult:
     """유효한 케이스만 test_cases에 담고, 버린 이유는 errors에 남긴다."""
     notes: list[str] = []
@@ -121,9 +136,11 @@ def parse_test_cases(raw: str) -> ParseResult:
     else:
         load_error = None
 
-    # 예전 프롬프트(최상위 배열) 응답도 받아준다
+    common = ""
+    # 예전 프롬프트(최상위 배열) 응답도 받아준다. common_preconditions가 없는 이전 형식도 허용
     if isinstance(data, dict) and isinstance(data.get("test_cases"), list):
         cases = data["test_cases"]
+        common = data.get("common_preconditions") if isinstance(data.get("common_preconditions"), str) else ""
     elif isinstance(data, list):
         cases = data
     else:
@@ -131,8 +148,9 @@ def parse_test_cases(raw: str) -> ParseResult:
         if cases is None:
             return ParseResult(errors=[load_error or "최상위에 'test_cases' 배열이 없습니다"])
         notes.append(f"응답이 닫히지 않음(잘림 추정) — 완성된 케이스 {len(cases)}개만 회수")
+        common = _salvage_common(raw)
 
-    result = ParseResult(errors=notes)
+    result = ParseResult(errors=notes, common_preconditions=common)
     for index, case in enumerate(cases, start=1):
         case_errors = _validate_case(index, case)
         if case_errors:

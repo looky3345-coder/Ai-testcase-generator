@@ -154,6 +154,8 @@ class DecisionPointsTest(unittest.TestCase):
         self.assertIn("조건식(삼항) `slack_metrics.get('dnd_active')`", text)
         self.assertIn("if `hours <= 5`", text)
         self.assertIn("경계 5", text)
+        # 실제 사례: 모델이 단위 환산을 못 해 10000초를 경계값으로 표기 → 도구가 입력 단위 경계를 계산해 제시
+        self.assertIn("`current_work_seconds` = 17999 / 18000 / 18001", text)
         self.assertIn("try → 정상 완료 / 예외 발생(Exception)", text)
 
     def test_annotation_only_dependency_marked(self):
@@ -178,6 +180,27 @@ class DecisionPointsTest(unittest.TestCase):
         targets = {t.qualname: t for t in extract_targets(SAMPLE / "coverage.json", SAMPLE)}
         deps = targets["Grader.grade"].dependencies
         self.assertEqual(deps, ["logged: 같은 파일 함수 (라인 4): def logged(fn):"])
+
+
+class LinearConversionTest(unittest.TestCase):
+    def _hints(self, source):
+        import ast
+
+        from testgen.coverage_extractor import _decision_points
+
+        return "\n".join(_decision_points(ast.parse(source).body[0]))
+
+    def test_multiplication_and_reverse_order(self):
+        text = self._hints("def f(kb):\n    b = 1024 * kb\n    if b > 2048:\n        return 1\n")
+        self.assertIn("(`b = kb * 1024`): `kb` = 1 / 2 / 3", text)  # 2048 / 1024 = 2, 상수가 앞에 와도 인식
+
+    def test_non_integer_edge(self):
+        text = self._hints("def f(s):\n    m = s / 7\n    if m < 1.5:\n        return 1\n")
+        self.assertIn("입력 환산: `s` 경계 10.5", text)
+
+    def test_unrelated_compare_unchanged(self):
+        text = self._hints("def f(x):\n    if x < 3:\n        return 1\n")
+        self.assertNotIn("입력 환산", text)
 
 
 class LongFunctionTest(unittest.TestCase):

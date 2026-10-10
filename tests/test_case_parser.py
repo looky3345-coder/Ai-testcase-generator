@@ -78,6 +78,23 @@ class ParseTestCasesTest(unittest.TestCase):
         self.assertEqual(len(result.test_cases), 3)
         self.assertEqual(result.errors, ["중복 의심: TC-2의 입력·사전조건이 TC-1와 같음"])
 
+    def test_common_preconditions(self):
+        raw = json.dumps({"common_preconditions": "patch('m.f')는 'X' 반환", "test_cases": [VALID_CASE]})
+        result = parse_test_cases(raw)
+        self.assertEqual(result.common_preconditions, "patch('m.f')는 'X' 반환")
+        # 이전 형식(공통 사전조건 없음)도 허용
+        self.assertEqual(parse_test_cases(json.dumps({"test_cases": [VALID_CASE]})).common_preconditions, "")
+
+    def test_common_preconditions_salvaged_from_truncated(self):
+        whole = json.dumps(
+            {"common_preconditions": "공통 \"mock\"", "test_cases": [VALID_CASE, dict(VALID_CASE, id="TC-2")]},
+            ensure_ascii=False,
+        )
+        truncated = whole[: whole.index('"TC-2"') + 3]
+        result = parse_test_cases(truncated)
+        self.assertEqual(result.common_preconditions, '공통 "mock"')
+        self.assertEqual(len(result.test_cases), 1)
+
     def test_no_json(self):
         result = parse_test_cases("JSON이 없는 응답")
         self.assertEqual(result.test_cases, [])

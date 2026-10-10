@@ -5,13 +5,14 @@ from testgen.models import TestTarget
 
 # 실제 강제/검증 스키마는 testgen.case_parser.TEST_CASES_SCHEMA. 여기는 모델에게 보여줄 설명용 예시.
 _OUTPUT_SCHEMA = """{
+  "common_preconditions": "모든 케이스에 공통인 사전조건 (공통 mock/patch와 그 반환값, 공통 DB 상태)",
   "test_cases": [
     {
       "id": "TC-1",
       "technique": "boundary_value_analysis | equivalence_partitioning",
       "description": "무엇을 검증하는 테스트인지 한국어로 간단히",
       "target_lines": "이 테스트가 겨냥하는 미커버 항목의 라인 (예: '45-48' 또는 분기면 '12->15')",
-      "preconditions": "필요한 사전 상태. 없으면 빈 문자열",
+      "preconditions": "이 케이스만의 사전조건 (common_preconditions와 다른 점). 없으면 빈 문자열",
       "input": "테스트에 사용할 구체적인 입력값",
       "expected": "기대 결과 (반환값, 상태 코드, 예외 등)",
       "priority": "high | medium | low"
@@ -97,8 +98,10 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
 8. try/except가 있으면:
    - 정상 완료 쪽 케이스를 최소 1개 포함하세요. 이때 mock 반환값은 코드 안의 대체(fallback) 문자열과 다른, 구분 가능한 값으로 하세요
    - 예외(side_effect)는 except 경로를 겨냥한 케이스에만 쓰세요. 다른 분기를 시험하는 케이스까지 모두 예외로 만들지 마세요
-9. 각 필드는 간결하게 쓰세요 (description·preconditions·input·expected 각각 한두 문장).
-   같은 사전조건을 케이스마다 길게 반복하지 말고 핵심 차이만 쓰세요 — 출력이 길면 중간에 잘립니다.
+9. 각 필드는 간결하게 쓰세요 (description·preconditions·input·expected 각각 한두 문장) — 출력이 길면 중간에 잘립니다.
+   모든 케이스에 공통인 mock/patch는 common_preconditions에 한 번만 쓰고, 케이스별 preconditions에는 다른 점만 쓰세요.
+   각 케이스는 common_preconditions + 자기 preconditions만으로 실행 가능해야 합니다. 필요한 mock이 어디에도 없으면 안 됩니다
+   (예: 외부 API를 부르는 함수를 mock하지 않으면 테스트가 실제 API를 호출합니다).
 10. 분기의 효과가 반환값에 드러나지 않고 mock에 넘기는 인자에만 드러나면(예: 조건에 따라 만들어진 문자열을 외부 함수에 전달),
    expected에 반환값뿐 아니라 그 mock의 호출 인자 검증을 쓰세요 (예: "전달된 인자에 '<조건에 따라 추가되는 문구>'가 포함됨").
    반환값만으로는 어느 분기를 탔는지 구분할 수 없는 테스트는 분기 로직이 틀려도 통과합니다.

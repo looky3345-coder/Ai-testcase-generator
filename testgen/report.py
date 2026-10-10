@@ -22,11 +22,15 @@ CSV_COLUMNS = [
     "priority",
     "target_lines",
     "description",
+    "common_preconditions",
     "preconditions",
     "input",
     "expected",
     "review_note",
 ]
+
+# 케이스 객체에서 그대로 가져오는 열
+CASE_COLUMNS = ["technique", "priority", "target_lines", "description", "preconditions", "input", "expected"]
 
 
 def write_cases_csv(results: list[tuple[TestTarget, LLMResponse]], path: Path) -> int:
@@ -47,7 +51,8 @@ def write_cases_csv(results: list[tuple[TestTarget, LLMResponse]], path: Path) -
                     "target_id": target.target_id,
                     "model": response.model,
                     "case_id": case["id"],
-                    **{key: case[key] for key in CSV_COLUMNS[5:-1]},
+                    "common_preconditions": response.common_preconditions,
+                    **{key: case[key] for key in CASE_COLUMNS},
                     "review_note": " / ".join(notes.get(case["id"], [])),
                 }
             )

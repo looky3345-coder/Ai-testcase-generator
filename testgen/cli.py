@@ -233,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             parsed = parse_test_cases(response.raw_output)
             response.test_cases = parsed.test_cases
             response.parse_errors = parsed.errors
+            response.common_preconditions = parsed.common_preconditions
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return target, response
 

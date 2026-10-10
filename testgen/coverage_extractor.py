@@ -179,8 +179,31 @@ def _short(node: ast.AST, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def _boundary_hints(test: ast.AST) -> list[str]:
-    """조건식 안의 `값 <op> 숫자상수` 비교에서 경계값 후보를 뽑는다."""
+def _linear_conversions(node: ast.AST) -> dict[str, tuple[str, type, float]]:
+    """`hours = current_work_seconds / 3600`처럼 다른 이름을 상수로 나누거나 곱해 만든 변수 → (원래 이름, 연산, 상수).
+    소형 모델이 경계값을 입력 단위로 환산하지 못해(실제 사례: hours <= 5 → 18000초 대신 10000초를 경계값으로 표기) 미리 계산해 준다."""
+    conversions = {}
+    for n in ast.walk(node):
+        if not (isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)):
+            continue
+        value = n.value
+        if not (isinstance(value, ast.BinOp) and isinstance(value.op, (ast.Div, ast.Mult))):
+            continue
+        name, const = value.left, value.right
+        if isinstance(value.op, ast.Mult) and isinstance(name, ast.Constant):
+            name, const = const, name  # 3600 * seconds
+        if isinstance(name, ast.Name) and isinstance(const, ast.Constant) and type(const.value) in (int, float) and const.value:
+            conversions[n.targets[0].id] = (name.id, type(value.op), const.value)
+    return conversions
+
+
+def _fmt(number: float) -> str:
+    return str(int(number)) if float(number).is_integer() else f"{number:g}"
+
+
+def _boundary_hints(test: ast.AST, conversions: dict[str, tuple[str, type, float]] | None = None) -> list[str]:
+    """조건식 안의 `값 <op> 숫자상수` 비교에서 경계값 후보를 뽑는다. 변환된 변수면 입력 단위 경계도 계산한다."""
+    conversions = conversions or {}
     hints = []
     for cmp in (n for n in ast.walk(test) if isinstance(n, ast.Compare)):
         operands = [cmp.left, *cmp.comparators]
@@ -189,7 +212,20 @@ def _boundary_hints(test: ast.AST) -> list[str]:
                 continue
             for const, other in ((right, left), (left, right)):
                 if isinstance(const, ast.Constant) and type(const.value) in (int, float):
-                    hints.append(f"`{_short(other, 40)}`의 경계 {const.value} (바로 아래 / 정확히 {const.value} / 바로 위)")
+                    hint = f"`{_short(other, 40)}`의 경계 {const.value} (바로 아래 / 정확히 {const.value} / 바로 위)"
+                    if isinstance(other, ast.Name) and other.id in conversions:
+                        source, conv_op, factor = conversions[other.id]
+                        edge = const.value * factor if conv_op is ast.Div else const.value / factor
+                        symbol = "/" if conv_op is ast.Div else "*"
+                        if float(edge).is_integer():
+                            edge = int(edge)
+                            hint += (
+                                f" → 입력 환산 (`{other.id} = {source} {symbol} {_fmt(factor)}`): "
+                                f"`{source}` = {edge - 1} / {edge} / {edge + 1}"
+                            )
+                        else:
+                            hint += f" → 입력 환산: `{source}` 경계 {_fmt(edge)}"
+                    hints.append(hint)
                     break
     return hints
 
@@ -197,6 +233,7 @@ def _boundary_hints(test: ast.AST) -> list[str]:
 def _decision_points(node: ast.AST) -> list[str]:
     """함수 안의 분기 지점 체크리스트. 소형 모델이 "조건문 양쪽을 모두"라는 추상 지시를
     스스로 풀어내지 못해(실제 사례: hours <= 5 참 경로·except 경로 누락) 코드에서 결정적으로 뽑아 준다."""
+    conversions = _linear_conversions(node)
     tests_in_conditions = set()
     for n in ast.walk(node):
         if isinstance(n, (ast.If, ast.While, ast.IfExp)):
@@ -209,7 +246,7 @@ def _decision_points(node: ast.AST) -> list[str]:
         if isinstance(n, (ast.If, ast.While)):
             kind = "if" if isinstance(n, ast.If) else "while"
             line = f"라인 {n.lineno}: {kind} `{_short(n.test)}` → 참 / 거짓 양쪽"
-            hints = _boundary_hints(n.test)
+            hints = _boundary_hints(n.test, conversions)
             if hints:
                 line += "\n    경계값 후보: " + "; ".join(hints)
             points.append((n.lineno, line))

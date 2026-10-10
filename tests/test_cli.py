@@ -62,7 +62,7 @@ class CasesCsvTest(unittest.TestCase):
             "expected": "ValueError", "priority": "high",
         }
         duplicate = dict(case, id="TC-2", description="같은 입력")
-        fake = _FakeOpenAIServer(content=_json.dumps({"test_cases": [case, duplicate]}))
+        fake = _FakeOpenAIServer(content=_json.dumps({"common_preconditions": "공통 mock", "test_cases": [case, duplicate]}))
         self.addCleanup(fake.close)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -82,6 +82,7 @@ class CasesCsvTest(unittest.TestCase):
         self.assertEqual(rows[0]["model"], "local-m")
         self.assertEqual(rows[0]["description"], "경계 확인")
         self.assertEqual(rows[0]["review_note"], "")
+        self.assertEqual(rows[0]["common_preconditions"], "공통 mock")
         self.assertIn("중복 의심", rows[1]["review_note"])
 
 
