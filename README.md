@@ -81,7 +81,8 @@ python -m testgen.cli \
 
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
 
-- `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`)
+- `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`,
+  `never_called`: 테스트가 한 번도 호출하지 않은 함수, `dependencies`: 함수가 참조하는 모듈 수준 이름과 import 출처)
 - `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
 - `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`

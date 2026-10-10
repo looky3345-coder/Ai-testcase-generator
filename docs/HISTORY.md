@@ -2,6 +2,38 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 실제 프롬프트 검토 반영: 쪼개진 갭 합치기, 미호출 함수 표시, 의존성 목록
+
+**배경**
+- 사용자가 실제 프로젝트 dry-run 프롬프트(`ai_service.py::analyze_work_hours`)를 공유
+- 검토 결과 7가지 문제 발견 → [리뷰 문서](reviews/2026-10-10-first-real-prompt-review.md)
+- 사용자 질문: "prompts 폴더 최상단이 먼저 생긴 파일인가?" → 아님. 파일명이 해시라 정렬 의미 없음,
+  처리 순서는 `targets.json`. 분기 갭 많은 순으로 고르는 명령을 안내 (파일명 가독성 개선은 제안만 하고 보류)
+
+**과정**
+- 같은 구조의 모듈을 만들어 실제 pytest-cov 출력으로 재현: coverage.py는 **여러 줄 문장의 이어지는 줄과 빈 줄을
+  `missing_lines`에 넣지 않으므로**, 연속 번호로만 묶던 기존 방식은 한 번도 호출되지 않은 함수를 여러 조각으로 나눴음
+- 합치는 기준을 "번호가 연속"에서 "사이에 실행된 라인이 없음(`executed_lines` 이용)"으로 변경.
+  단, 모듈 전체가 미실행인 경우 함수 경계를 넘어 합쳐지지 않도록 같은 함수끼리만 합침
+- 미실행 표시는 AST 문장 범위로 확장. 복합문(if/try)은 머리가 미실행이면 본문도 미실행이므로 범위 확장이 안전함을 확인
+- 테스트 작성 중 테스트 클래스 상속으로 부모 테스트가 중복 실행(35개)되는 실수 → 공통 setUp 베이스로 분리(29개)
+
+**변경**
+- `testgen/coverage_extractor.py`: `_merge_line_ranges`, `_missing_statement_lines`, `_module_symbols`, `_dependencies` 추가
+- `testgen/models.py`: `TestTarget.never_called`, `TestTarget.dependencies` (targets.json에도 출력)
+- `testgen/prompt_builder.py`: 미호출 함수 안내, "참조하는 모듈 수준 이름과 출처" 목록, mock/patch 지시(5번) 추가
+- 사용자 영향: 같은 coverage.json이어도 갭 수가 줄고(조각 합침) 프롬프트가 길어짐(의존성 목록)
+
+**검증**
+- 단위 테스트 29개 통과 (신규 5개: 미호출 함수 재현 픽스처 `tests/fixtures/sample_project/app/ai_service.py`)
+- 재현 모듈 dry-run: 갭 5조각 → 1개, 이어지는 줄 표시, 의존성 3개 출력 확인
+- **미검증**: 실제 프로젝트에서 갭/대상 수 변화와 개선된 프롬프트 — 사용자 재실행 필요.
+  개선된 프롬프트로 실제 LLM 응답 품질이 나아지는지는 아직 모름
+
+**다음**
+- 사용자 PC에서 최신 코드로 dry-run 재실행 → 같은 함수의 프롬프트 비교
+- `--framework-hint`에 conftest 픽스처 정보 넣기 (리뷰 5번), patch 경로 문제(6번)는 3단계에서 실행으로 검증
+
 ## 2026-10-10 — 실제 대상 프로젝트 dry-run 첫 성공 + `--coverage-json` 경로 처리 개선
 
 **배경**

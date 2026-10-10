@@ -14,12 +14,18 @@ def _by_name(targets):
     return {t.qualname: t for t in targets}
 
 
-class ExtractTargetsTest(unittest.TestCase):
+class _SampleTargets(unittest.TestCase):
     def setUp(self):
-        self.targets = _by_name(extract_targets(SAMPLE / "coverage.json", SAMPLE))
+        targets = extract_targets(SAMPLE / "coverage.json", SAMPLE)
+        self.targets = _by_name(t for t in targets if t.file == "app/service.py")
+        self.ai = _by_name(t for t in targets if t.file == "app/ai_service.py")
+
+
+class ExtractTargetsTest(_SampleTargets):
 
     def test_groups_gaps_by_function(self):
         self.assertEqual(set(self.targets), {"Grader.grade", "Grader.unused", None})
+        self.assertEqual(set(self.ai), {"generate_with_retry", "summarize"})
 
     def test_branch_direction_kept(self):
         arcs = {(g.start_line, g.branch_target) for g in self.targets["Grader.grade"].gaps if g.kind == "branch"}
@@ -50,6 +56,39 @@ class ExtractTargetsTest(unittest.TestCase):
         for gap in target.gaps:
             self.assertIn(gap.describe(), prompt)
         self.assertIn("라인 19의 분기: 라인 18(으)로 가는 경로", prompt)
+
+
+class NeverCalledFunctionTest(_SampleTargets):
+    """실제 프로젝트(ai_service.analyze_work_hours) 사례 재현: import만 되고 호출되지 않은 함수."""
+
+    def test_fragments_merged_into_one_gap(self):
+        # coverage.py는 빈 줄·여러 줄 문장의 이어지는 줄을 missing_lines에 넣지 않아 구간이 5개로 쪼개졌었다
+        target = self.ai["summarize"]
+        self.assertTrue(target.never_called)
+        self.assertEqual([(g.kind, g.start_line, g.end_line) for g in target.gaps], [("line", 15, 34)])
+
+    def test_continuation_lines_marked(self):
+        lines = {int(l[3:7]): l[:2] for l in self.ai["summarize"].source.splitlines()}
+        self.assertEqual(lines[22], ">>")  # 여러 줄 딕셔너리의 둘째 줄
+        self.assertEqual(lines[28], ">>")  # 여러 줄 f-string 안
+        self.assertEqual(lines[16], "  ")  # 빈 줄은 표시하지 않음
+
+    def test_dependencies_listed_with_origin(self):
+        deps = self.ai["summarize"].dependencies
+        self.assertEqual(
+            [d.split(":")[0] for d in deps], ["get_today_metrics", "generate_with_retry", "datetime"]
+        )
+        self.assertIn("from app.clients import get_today_metrics", deps[0])
+        self.assertIn("같은 파일 함수", deps[1])
+
+    def test_called_function_not_flagged(self):
+        self.assertFalse(self.targets["Grader.grade"].never_called)
+
+    def test_prompt_mentions_never_called_and_dependencies(self):
+        prompt = build_prompt(self.ai["summarize"])
+        self.assertIn("한 번도 호출되지 않았습니다", prompt)
+        self.assertIn("from app.clients import get_today_metrics", prompt)
+        self.assertIn("mock/patch", prompt)
 
 
 class LongFunctionTest(unittest.TestCase):

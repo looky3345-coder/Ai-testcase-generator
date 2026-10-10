@@ -59,6 +59,9 @@ class TestTarget:
     source: str  # 라인 번호와 마커('>>' 미실행, 'B>' 일부 분기 미실행)가 붙은 소스
     truncated: bool  # 함수가 길어 갭 주변만 잘라 보여줬는지
     gaps: list[CoverageGap] = field(default_factory=list)
+    never_called: bool = False  # 테스트가 이 함수를 한 번도 호출하지 않음 (본문 실행 라인 0개)
+    # 함수가 참조하는 모듈 수준 이름과 출처 (예: "get_kst_now: from utils import get_kst_now") — mock 후보
+    dependencies: list[str] = field(default_factory=list)
 
     @property
     def target_id(self) -> str:
@@ -74,6 +77,8 @@ class TestTarget:
             "start_line": self.start_line,
             "signature": self.signature,
             "truncated": self.truncated,
+            "never_called": self.never_called,
+            "dependencies": self.dependencies,
             "source": self.source,
             "gaps": [g.to_dict() for g in self.gaps],
         }

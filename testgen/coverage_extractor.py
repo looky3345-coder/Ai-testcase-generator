@@ -82,6 +82,77 @@ def _build_signature(source_lines: list[str], node: ast.AST) -> str:
     return text or source_lines[node.lineno - 1].strip()
 
 
+def _missing_statement_lines(tree: ast.AST, missing: set[int]) -> set[int]:
+    """미실행 문장이 차지하는 모든 라인. coverage.py는 여러 줄 문장의 첫 줄만 보고하므로
+    (예: 여러 줄 f-string, 딕셔너리) 이어지는 줄도 미실행으로 표시하기 위해 문장 범위로 넓힌다.
+    if/for/try 같은 복합문은 머리가 미실행이면 본문 전체도 미실행이므로 그대로 넓혀도 맞다."""
+    lines = set(missing)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt) and node.lineno in missing:
+            lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return lines
+
+
+def _merge_line_ranges(
+    ranges: list[tuple[int, int]], executed: set[int] | None, functions: list[tuple[str, ast.AST]]
+) -> list[tuple[int, int]]:
+    """사이에 실행된 라인이 하나도 없는 미실행 구간끼리 합친다 (빈 줄·이어지는 줄 때문에 쪼개진 것).
+    다른 함수의 구간끼리는 합치지 않는다. executed 정보가 없으면 그대로 둔다."""
+    if executed is None:
+        return ranges
+    merged: list[tuple[int, int]] = []
+    for lo, hi in ranges:
+        if merged:
+            prev_lo, prev_hi = merged[-1]
+            same_function = _enclosing_function(functions, prev_lo)[1] is _enclosing_function(functions, lo)[1]
+            if same_function and not any(prev_hi < line < lo for line in executed):
+                merged[-1] = (prev_lo, hi)
+                continue
+        merged.append((lo, hi))
+    return merged
+
+
+def _module_symbols(tree: ast.Module, source_lines: list[str]) -> dict[str, str]:
+    """모듈 최상위에서 정의/임포트된 이름 → 한 줄 설명. 함수가 참조하는 의존성을 알려주는 데 쓴다."""
+    symbols: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            module = "." * node.level + (node.module or "")
+            for alias in node.names:
+                suffix = f" as {alias.asname}" if alias.asname else ""
+                symbols[alias.asname or alias.name] = f"from {module} import {alias.name}{suffix}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                suffix = f" as {alias.asname}" if alias.asname else ""
+                symbols[alias.asname or alias.name.split(".")[0]] = f"import {alias.name}{suffix}"
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols[node.name] = f"같은 파일 함수 (라인 {node.lineno}): {_build_signature(source_lines, node)}"
+        elif isinstance(node, ast.ClassDef):
+            symbols[node.name] = f"같은 파일 클래스 (라인 {node.lineno})"
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            text = source_lines[node.lineno - 1].strip()
+            text = text if len(text) <= 100 else text[:97] + "..."
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    symbols[target.id] = f"모듈 변수 (라인 {node.lineno}): {text}"
+    return symbols
+
+
+def _dependencies(node: ast.AST, symbols: dict[str, str]) -> list[str]:
+    """함수 안에서 읽는 이름 중 모듈 수준 임포트/정의에 해당하는 것 (등장 순서)."""
+    own_name = getattr(node, "name", None)
+    names = sorted(
+        (n for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)),
+        key=lambda n: (n.lineno, n.col_offset),
+    )
+    seen: list[str] = []
+    for n in names:
+        if n.id in symbols and n.id != own_name and n.id not in seen:
+            seen.append(n.id)
+    return [f"{name}: {symbols[name]}" for name in seen]
+
+
 def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
     merged: list[tuple[int, int]] = []
     for lo, hi in sorted(windows):
@@ -138,6 +209,8 @@ def _build_target(
     missing: set[int],
     partial: set[int],
     function_spans: list[tuple[int, int]],
+    executed: set[int] | None,
+    symbols: dict[str, str],
 ) -> TestTarget:
     if node is None:
         # 모듈 레벨 코드: 파일 전체는 너무 크므로 갭 주변만
@@ -162,6 +235,10 @@ def _build_target(
     else:
         windows = [(start, end)]
 
+    # 본문 중 실행된 라인이 하나도 없으면 테스트가 이 함수를 아예 호출하지 않은 것
+    body_start = node.body[0].lineno if node.body else node.lineno
+    never_called = executed is not None and not any(body_start <= line <= end for line in executed)
+
     return TestTarget(
         file=rel_path,
         qualname=qualname,
@@ -170,6 +247,8 @@ def _build_target(
         source=_render_source(source_lines, windows, missing, partial),
         truncated=truncated,
         gaps=gaps,
+        never_called=never_called,
+        dependencies=_dependencies(node, symbols),
     )
 
 
@@ -188,12 +267,16 @@ def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[
     functions = list(_iter_functions(tree))
 
     missing = set(file_report.get("missing_lines", []))
+    # 오래된 coverage 형식에는 executed_lines가 없을 수 있다 → 구간 합치기·미호출 판정을 하지 않는다
+    executed = set(file_report["executed_lines"]) if "executed_lines" in file_report else None
     # 출발 라인이 아예 실행되지 않은 분기는 버린다: 그 라인을 실행시키는 게 먼저이고,
     # 이미 line 갭으로 잡혀 있으므로 별도 갭으로 만들면 중복이다.
     branch_arcs = sorted(
         (src, dst) for src, dst in file_report.get("missing_branches", []) if src not in missing
     )
     partial = {src for src, _ in branch_arcs}
+    missing_display = _missing_statement_lines(tree, missing)
+    symbols = _module_symbols(tree, source_lines)
 
     # 같은 이름의 함수(예: @property 와 @x.setter)가 있을 수 있어 이름이 아니라 노드 기준으로 묶는다
     grouped: dict[int, tuple[str | None, ast.AST | None, list[CoverageGap]]] = {}
@@ -202,7 +285,7 @@ def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[
         qualname, node = _enclosing_function(functions, gap_line)
         grouped.setdefault(id(node), (qualname, node, []))[2].append(make_gap(qualname))
 
-    for start, end in _group_consecutive(list(missing)):
+    for start, end in _merge_line_ranges(_group_consecutive(list(missing)), executed, functions):
         add(start, lambda q, s=start, e=end: CoverageGap(rel_path, "line", s, e, q))
     for src, dst in branch_arcs:
         add(src, lambda q, s=src, d=dst: CoverageGap(rel_path, "branch", s, s, q, branch_target=d))
@@ -218,7 +301,10 @@ def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[
     for qualname, node, target_gaps in grouped.values():
         target_gaps.sort(key=lambda g: (g.start_line, g.kind))
         targets.append(
-            _build_target(rel_path, qualname, node, target_gaps, source_lines, missing, partial, function_spans)
+            _build_target(
+                rel_path, qualname, node, target_gaps, source_lines,
+                missing_display, partial, function_spans, executed, symbols,
+            )
         )
     targets.sort(key=lambda t: t.start_line)
     return targets
