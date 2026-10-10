@@ -93,6 +93,8 @@ python -m testgen.cli \
 
 ### 로컬 모델 사용법 (무과금)
 
+설치부터 GPU 확인까지 단계별 가이드: [`docs/local-llm-setup.md`](docs/local-llm-setup.md)
+
 ```bash
 ollama pull <모델 태그>          # 예: Ornith 또는 qwen3 계열. 태그는 `ollama list`로 확인
 ollama serve                     # 이미 실행 중이면 생략
