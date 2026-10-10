@@ -30,6 +30,7 @@
 
 **검증**
 - 마무리 시점 단위 테스트 63개 통과(master 병합 후 재확인), master가 브랜치의 조상이 됨을 확인
+- 사용자 요청으로 MR 생성: looky3345-coder/Ai-testcase-generator#5 (`claude/llm-test-case-generator-lgihpf` → `master`)
 
 ## 2026-10-10 — 4차 결과: 경계값 해결, 남은 문제는 실행 검증 영역 → 3단계 설계 제안(ADR 0005)
 
