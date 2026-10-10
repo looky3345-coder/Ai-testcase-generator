@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from dataclasses import replace
@@ -25,7 +26,7 @@ from testgen.case_parser import TEST_CASES_SCHEMA, parse_test_cases
 from testgen.config import DEFAULT_LOCAL_BASE_URL, DEFAULT_OUTPUT_DIR, LOCAL_API_KEY
 from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
-from testgen.models import TestTarget
+from testgen.models import LLMResponse, TestTarget
 from testgen.prompt_builder import build_prompt
 from testgen.report import write_cases_csv
 
@@ -63,6 +64,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=4, help="LLM 호출 동시 실행 개수")
     parser.add_argument("--dry-run", action="store_true", help="갭 추출과 프롬프트 생성만 하고 LLM은 호출하지 않음")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="같은 프롬프트로 이미 성공한 대상×모델은 다시 호출하지 않고 이전 결과를 재사용 "
+        "(--limit 등으로 나눠 실행할 때 사용. 프롬프트가 바뀐 대상은 다시 호출)",
+    )
     warn_swallowed_quote(sys.argv[1:] if argv is None else argv)
     return parser.parse_args(argv)
 
@@ -196,16 +203,36 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     jobs = [(runner, target) for target in targets for runner in runners]
-    results = {name: {"ok": 0, "fail": 0, "unparsed": 0, "cases": 0} for name in model_names}
+    results = {name: {"ok": 0, "fail": 0, "unparsed": 0, "cases": 0, "reused": 0} for name in model_names}
+
+    def _previous_result(out_path: Path, prompt_sha: str) -> LLMResponse | None:
+        """같은 프롬프트로 케이스를 얻은 이전 결과가 있으면 돌려준다. 실패·파싱 실패·프롬프트 변경이면 None (다시 호출)."""
+        if not out_path.is_file():
+            return None
+        try:
+            previous = LLMResponse.from_dict(json.loads(out_path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if previous.ok and previous.test_cases and previous.prompt_sha == prompt_sha:
+            previous.reused = True
+            return previous
+        return None
 
     def _run_job(job):
         runner, target = job
-        response = runner.run(target.target_id, prompts[target.target_id])
+        prompt = prompts[target.target_id]
+        prompt_sha = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
+        out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
+        if args.resume:
+            previous = _previous_result(out_path, prompt_sha)
+            if previous is not None:
+                return target, previous
+        response = runner.run(target.target_id, prompt)
+        response.prompt_sha = prompt_sha
         if response.ok:
             parsed = parse_test_cases(response.raw_output)
             response.test_cases = parsed.test_cases
             response.parse_errors = parsed.errors
-        out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return target, response
 
@@ -216,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
             target, response = future.result()
             finished.append((target, response))
             r = results[response.model]
+            if response.reused:
+                r["reused"] += 1
             if not response.ok:
                 status = f"FAIL ({response.error})"
                 r["fail"] += 1
@@ -250,12 +279,16 @@ def main(argv: list[str] | None = None) -> int:
                         " — 합계가 4096/8192 같은 값이면 런타임 컨텍스트 한도"
                     )
                 status += "]"
-            print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({response.elapsed_sec:.1f}s)")
+            timing = "이전 결과 재사용" if response.reused else f"{response.elapsed_sec:.1f}s"
+            print(f"  [{i}/{len(jobs)}] {response.model} / 대상 {response.target_id}: {status} ({timing})")
 
     print("\n=== 요약 ===")
     for name in model_names:
         r = results[name]
-        print(f"  {name}: 성공 {r['ok']}건 (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건")
+        reused = f" (그중 재사용 {r['reused']}건)" if r["reused"] else ""
+        print(
+            f"  {name}: 성공 {r['ok']}건{reused} (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건"
+        )
     print(f"응답 파일 저장 위치: {responses_dir}")
     cases_csv = output_dir / "test_cases.csv"
     written = write_cases_csv(finished, cases_csv)

@@ -169,6 +169,55 @@ class TruncatedResponseTest(unittest.TestCase):
         self.assertIn("성공 0건 (케이스 0개) / 파싱 실패 1건", out)
 
 
+class ResumeTest(unittest.TestCase):
+    """나눠 실행: 이미 성공한 대상×모델은 --resume으로 다시 호출하지 않는다 (GPU 사용 시간 절약)."""
+
+    def _run_with(self, fake, out, *extra):
+        return _run(
+            "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", str(out),
+            "--models", "local:m", "--local-base-url", fake.base_url, "--workers", "1", *extra,
+        )
+
+    def test_resume_skips_done_and_continues_rest(self):
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        case = {
+            "id": "TC-1", "technique": "equivalence_partitioning", "description": "d", "target_lines": "1",
+            "preconditions": "", "input": "x", "expected": "y", "priority": "low",
+        }
+        fake = _FakeOpenAIServer(content=_json.dumps({"test_cases": [case]}))
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self._run_with(fake, out, "--limit", "2")
+            self.assertEqual(len(fake.requests), 2)
+
+            # 다음 묶음: 전체 대상(6개) 중 앞의 2개는 재사용, 나머지 4개만 호출
+            code, stdout, _ = self._run_with(fake, out, "--resume")
+            self.assertEqual(code, 0)
+            self.assertEqual(len(fake.requests), 2 + 4)
+            self.assertIn("그중 재사용 2건", stdout)
+            self.assertIn("이전 결과 재사용", stdout)
+            with (out / "test_cases.csv").open(encoding="utf-8-sig") as f:
+                self.assertEqual(sum(1 for _ in f) - 1, 6)  # 재사용 결과도 CSV에 포함
+
+            # 프롬프트가 바뀌면(--framework-hint 변경) 다시 호출
+            self._run_with(fake, out, "--resume", "--limit", "1", "--framework-hint", "다른 힌트")
+            self.assertEqual(len(fake.requests), 7)
+
+    def test_without_resume_calls_again(self):
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        fake = _FakeOpenAIServer()
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_with(fake, Path(tmp), "--limit", "1")
+            self._run_with(fake, Path(tmp), "--limit", "1")
+        self.assertEqual(len(fake.requests), 2)
+
+
 class FilterTargetsTest(unittest.TestCase):
     def test_qualname_filter(self):
         from testgen.cli import filter_targets

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 
 
 def _short_hash(text: str) -> str:
@@ -107,6 +107,15 @@ class LLMResponse:
     reasoning: str = ""  # 추론형 모델이 별도 필드로 내보낸 사고 과정 (있을 때만)
     prompt_tokens: int | None = None  # 입력 토큰 수 (런타임이 알려줄 때)
     completion_tokens: int | None = None  # 출력 토큰 수
+    prompt_sha: str = ""  # 보낸 프롬프트의 해시 — --resume에서 같은 프롬프트로 이미 성공한 결과인지 판단
+    reused: bool = False  # --resume으로 이전 결과를 재사용했는지 (파일에는 저장하지 않음)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LLMResponse":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("reused")
+        return data

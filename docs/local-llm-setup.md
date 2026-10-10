@@ -77,6 +77,21 @@ python -m testgen.cli `
 - 결과: `output\test_cases.csv` (엑셀), 원본 응답: `output\responses\`
 - 공유할 것: 콘솔 요약 줄, `test_cases.csv`, 소요 시간
 
+### 4-3. 전체 실행을 나눠서 하기
+
+함수 하나에 수십 초~1분이 걸리므로 107개를 한 번에 돌리지 말고 나눠 실행한다.
+`--resume`을 붙이면 같은 프롬프트로 이미 성공한 함수는 다시 호출하지 않는다.
+
+```powershell
+# 1회차: 앞에서부터 20개
+python.exe -m testgen.cli <경로 옵션들> --models "local:ornith15-9b-16k" --workers 1 --limit 20 --resume
+# 2회차(다른 날): 40개까지 — 앞 20개는 재사용, 21~40번째만 새로 호출
+python.exe -m testgen.cli <경로 옵션들> --models "local:ornith15-9b-16k" --workers 1 --limit 40 --resume
+```
+- `--file-contains services`처럼 폴더 단위로 나눠도 된다
+- 프롬프트가 바뀐 함수(도구 업데이트, `--framework-hint` 변경 등)는 자동으로 다시 호출된다
+- `test_cases.csv`에는 재사용한 결과까지 모두 들어간다
+
 ## 5. GPU 부담
 
 - 부하 수준은 게임과 비슷하며, 이 도구는 생성 중에만 짧게(호출당 수 초~수십 초) 사용하고 쉬는 간헐적 부하다. 상시 고부하(채굴 등)와 다름
