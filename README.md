@@ -129,6 +129,16 @@ python -m pytest tests/ --cov=app --cov-branch --cov-report=json:coverage.json
 - 이 도구(`testgen`)는 표준 라이브러리만 쓰므로 대상 프로젝트 가상환경 안에서 실행해도, 밖에서 실행해도 된다.
 - 테스트 일부가 실패해도 `coverage.json`은 만들어진다. 갭 추출에는 문제없다.
 
+### `.\.venv\Scripts\Activate.ps1` (가상환경 켜기)가 실행되지 않음
+
+| 오류 메시지 | 조치 |
+|---|---|
+| "이 시스템에서 스크립트를 실행할 수 없으므로…" | `Set-ExecutionPolicy -Scope Process Bypass` 후 다시 실행 (현재 창에만 적용) |
+| "…용어가 cmdlet, 함수… 이름으로 인식되지 않습니다" | `.venv`가 없거나 위치가 `backend`가 아님 → `cd`로 이동, 없으면 `python -m venv .venv` |
+| (cmd 창인 경우) | `.venv\Scripts\activate.bat` |
+
+켜지 않고 `.\.venv\Scripts\python.exe -m pytest ...`처럼 가상환경의 Python을 직접 지정해도 결과는 같다.
+
 ### coverage.json 생성 단계에서 `GroqError: The api_key client option must be set ...` (또는 다른 API 키 오류)
 
 대상 프로젝트가 모듈 import 시점에 외부 API 클라이언트를 만들면서 키를 요구하는 경우다.
