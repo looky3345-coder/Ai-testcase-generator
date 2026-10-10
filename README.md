@@ -16,6 +16,11 @@
 4. **CSV 변환 + 실행** — 케이스를 CSV로 변환해 기존 pytest 프레임워크로 실행 (미구현)
 5. **피드백 루프** — 실패 로그를 다시 LLM에 넣어 추가 엣지케이스 제안 (미구현)
 
+## 개발 히스토리
+
+변경 이력과 설계 결정은 [`docs/HISTORY.md`](docs/HISTORY.md),
+[`docs/decisions/`](docs/decisions/), [`docs/reviews/`](docs/reviews/)에 기록한다 (규칙: [`CLAUDE.md`](CLAUDE.md)).
+
 ## 요구사항
 
 - Python 3.9+ (표준 라이브러리만 사용, pip 설치 불필요)
