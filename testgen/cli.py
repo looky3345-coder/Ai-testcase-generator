@@ -27,6 +27,7 @@ from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
 from testgen.models import TestTarget
 from testgen.prompt_builder import build_prompt
+from testgen.report import write_cases_csv
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -39,6 +40,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--framework-hint", default=None, help="LLM 프롬프트에 넣을 대상 프로젝트/테스트 프레임워크 설명")
     parser.add_argument("--kind", choices=["all", "line", "branch"], default="all", help="추출할 갭 종류 필터")
     parser.add_argument("--file-contains", default=None, help="이 문자열을 포함하는 파일 경로의 갭만 처리")
+    parser.add_argument(
+        "--qualname", default=None, help="이 이름의 함수만 처리 (예: analyze_work_hours 또는 Class.method)"
+    )
     parser.add_argument("--limit", type=int, default=None, help="처리할 대상 함수 개수 상한 (LLM 호출 비용 제어용)")
     parser.add_argument(
         "--models",
@@ -56,9 +60,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def filter_targets(
-    targets: list[TestTarget], kind: str, file_contains: str | None, limit: int | None
+    targets: list[TestTarget],
+    kind: str,
+    file_contains: str | None,
+    limit: int | None,
+    qualname: str | None = None,
 ) -> list[TestTarget]:
     filtered = targets
+    if qualname:
+        # 전체 이름(Class.method) 또는 마지막 이름(method)이 일치하는 대상만
+        filtered = [
+            t for t in filtered if t.qualname and qualname in (t.qualname, t.qualname.rsplit(".", 1)[-1])
+        ]
     if kind != "all":
         # 해당 종류의 갭만 남기고, 남은 갭이 없는 대상은 제외한다
         filtered = [replace(t, gaps=[g for g in t.gaps if g.kind == kind]) for t in filtered]
@@ -101,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[1/2] 커버리지 갭 추출 중... ({args.coverage_json})")
     all_targets = extract_targets(args.coverage_json, args.source_root)
-    targets = filter_targets(all_targets, args.kind, args.file_contains, args.limit)
+    targets = filter_targets(all_targets, args.kind, args.file_contains, args.limit, args.qualname)
     total_gaps = sum(len(t.gaps) for t in all_targets)
     selected_gaps = sum(len(t.gaps) for t in targets)
     print(f"  전체 갭 {total_gaps}개 → 대상 함수 {len(all_targets)}개로 묶음")
@@ -113,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(
         f"  그중 대상 {len(targets)}개(갭 {selected_gaps}개) 선택 "
-        f"(kind={args.kind}, file_contains={args.file_contains}, limit={args.limit})"
+        f"(kind={args.kind}, file_contains={args.file_contains}, qualname={args.qualname}, limit={args.limit})"
     )
 
     output_dir: Path = args.output_dir
@@ -164,12 +177,14 @@ def main(argv: list[str] | None = None) -> int:
             response.parse_errors = parsed.errors
         out_path = responses_dir / f"{target.target_id}__{runner.name}.json"
         out_path.write_text(json.dumps(response.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        return response
+        return target, response
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [pool.submit(_run_job, job) for job in jobs]
+        finished = []
         for i, future in enumerate(as_completed(futures), start=1):
-            response = future.result()
+            target, response = future.result()
+            finished.append((target, response))
             r = results[response.model]
             if not response.ok:
                 status = f"FAIL ({response.error})"
@@ -190,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         r = results[name]
         print(f"  {name}: 성공 {r['ok']}건 (케이스 {r['cases']}개) / 파싱 실패 {r['unparsed']}건 / 호출 실패 {r['fail']}건")
     print(f"응답 파일 저장 위치: {responses_dir}")
+    cases_csv = output_dir / "test_cases.csv"
+    written = write_cases_csv(finished, cases_csv)
+    print(f"생성된 테스트 케이스 {written}개 모아보기 (엑셀로 열기): {cases_csv}")
     return 0
 
 

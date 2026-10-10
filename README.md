@@ -75,6 +75,7 @@ python -m testgen.cli \
 - `--dry-run` : LLM 호출 없이 갭 추출 + 프롬프트 생성까지만 실행
 - `--kind line|branch|all` : 갭 종류 필터
 - `--file-contains <substr>` : 특정 파일/디렉터리만 처리
+- `--qualname <이름>` : 특정 함수만 처리 (예: `analyze_work_hours`, `Class.method`). LLM 실호출을 1개로 시작할 때 유용
 - `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
 - `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
 - `--limit N` : 처리할 대상 함수 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
@@ -82,12 +83,17 @@ python -m testgen.cli \
 결과는 `output/` 아래에 저장된다 (git에서 제외됨):
 
 - `output/targets.json` — 대상 함수 목록 (함수별 소스 + 그 안의 갭: 미실행 라인 구간, 미실행 분기 `start_line → branch_target`,
-  `never_called`: 테스트가 한 번도 호출하지 않은 함수, `dependencies`: 함수가 참조하는 모듈 수준 이름과 import 출처)
+  `never_called`: 테스트가 한 번도 호출하지 않은 함수, `dependencies`: 함수가 참조하는 모듈 수준 이름과 import 출처,
+  `module_name`: 테스트 실행 시 import되는 모듈 이름 추정 — mock.patch 경로용)
 - `output/prompts/<target_id>.txt` — 대상별로 실제 전송한 프롬프트
 - `output/responses/<target_id>__<model>.json` — 모델별 원본 응답 + 성공/실패/소요시간
   + 스키마 검증을 통과한 `test_cases`와 버린 사유 `parse_errors`
+- `output/test_cases.csv` — **생성된 테스트 케이스 전체 모아보기** (한 줄에 케이스 하나, 엑셀로 바로 열림).
+  LLM 실행 시에만 생성되며 dry-run에서는 만들어지지 않음
 
 ### 로컬 모델 사용법 (무과금)
+
+설치부터 GPU 확인까지 단계별 가이드: [`docs/local-llm-setup.md`](docs/local-llm-setup.md)
 
 ```bash
 ollama pull <모델 태그>          # 예: Ornith 또는 qwen3 계열. 태그는 `ollama list`로 확인

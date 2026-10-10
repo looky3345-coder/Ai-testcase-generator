@@ -153,6 +153,32 @@ def _dependencies(node: ast.AST, symbols: dict[str, str]) -> list[str]:
     return [f"{name}: {symbols[name]}" for name in seen]
 
 
+def _guess_module_name(rel_path: str, tree: ast.Module, source_root: Path) -> str:
+    """테스트 실행 시 이 파일이 어떤 모듈 이름으로 import되는지 추정한다 (mock.patch 경로용).
+
+    대상 프로젝트가 `from services.x import y`처럼 sys.path에 하위 폴더(예: app/)를 넣고 쓰면
+    모듈 이름은 `app.services.ai_service`가 아니라 `services.ai_service`가 된다.
+    같은 파일의 절대 import가 가리키는 최상위 이름이 어느 폴더 아래에 실제로 있는지로 기준 폴더를 고른다.
+    """
+    parts = Path(rel_path).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    top_names = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            top_names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            top_names.update(alias.name.split(".")[0] for alias in node.names)
+
+    best_depth, best_hits = 0, 0
+    for depth in range(len(parts)):  # 기준 폴더 후보: source_root, source_root/parts[0], ...
+        root = source_root.joinpath(*parts[:depth])
+        hits = sum(1 for name in top_names if (root / name).is_dir() or (root / f"{name}.py").is_file())
+        if hits > best_hits:
+            best_depth, best_hits = depth, hits
+    return ".".join(parts[best_depth:])
+
+
 def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
     merged: list[tuple[int, int]] = []
     for lo, hi in sorted(windows):
@@ -211,6 +237,7 @@ def _build_target(
     function_spans: list[tuple[int, int]],
     executed: set[int] | None,
     symbols: dict[str, str],
+    module_name: str,
 ) -> TestTarget:
     if node is None:
         # 모듈 레벨 코드: 파일 전체는 너무 크므로 갭 주변만
@@ -223,6 +250,7 @@ def _build_target(
             source=_render_source(source_lines, windows, missing, partial),
             truncated=True,
             gaps=gaps,
+            module_name=module_name,
         )
 
     start, end = _def_start(node), node.end_lineno
@@ -249,10 +277,11 @@ def _build_target(
         gaps=gaps,
         never_called=never_called,
         dependencies=_dependencies(node, symbols),
+        module_name=module_name,
     )
 
 
-def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[TestTarget]:
+def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict, source_root: Path) -> list[TestTarget]:
     if any(part in _EXCLUDED_PARTS for part in Path(rel_path).parts):
         return []
     if not abs_path.is_file():
@@ -277,6 +306,7 @@ def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[
     partial = {src for src, _ in branch_arcs}
     missing_display = _missing_statement_lines(tree, missing)
     symbols = _module_symbols(tree, source_lines)
+    module_name = _guess_module_name(rel_path, tree, source_root)
 
     # 같은 이름의 함수(예: @property 와 @x.setter)가 있을 수 있어 이름이 아니라 노드 기준으로 묶는다
     grouped: dict[int, tuple[str | None, ast.AST | None, list[CoverageGap]]] = {}
@@ -303,7 +333,7 @@ def _targets_for_file(rel_path: str, abs_path: Path, file_report: dict) -> list[
         targets.append(
             _build_target(
                 rel_path, qualname, node, target_gaps, source_lines,
-                missing_display, partial, function_spans, executed, symbols,
+                missing_display, partial, function_spans, executed, symbols, module_name,
             )
         )
     targets.sort(key=lambda t: t.start_line)
@@ -322,6 +352,6 @@ def extract_targets(coverage_json_path: Path, source_root: Path) -> list[TestTar
     for raw_path, file_report in data.get("files", {}).items():
         rel_path = _to_posix(raw_path)
         abs_path = (source_root / raw_path).resolve()
-        targets.extend(_targets_for_file(rel_path, abs_path, file_report))
+        targets.extend(_targets_for_file(rel_path, abs_path, file_report, source_root))
 
     return targets

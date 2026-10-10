@@ -48,5 +48,50 @@ class CoverageJsonPathTest(unittest.TestCase):
         self.assertIn("--source-root가 맞는지", err)
 
 
+
+class CasesCsvTest(unittest.TestCase):
+    def test_llm_run_writes_cases_csv(self):
+        import csv
+        import json as _json
+
+        from tests.test_llm_runner import _FakeOpenAIServer
+
+        case = {
+            "id": "TC-1", "technique": "boundary_value_analysis", "description": "경계 확인",
+            "target_lines": "14->15", "preconditions": "", "input": "score=101",
+            "expected": "ValueError", "priority": "high",
+        }
+        fake = _FakeOpenAIServer(content=_json.dumps({"test_cases": [case]}))
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            code, stdout, _ = _run(
+                "--coverage-json", str(SAMPLE), "--source-root", str(SAMPLE), "--output-dir", str(out),
+                "--models", "local:m", "--local-base-url", fake.base_url, "--qualname", "grade", "--workers", "1",
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("test_cases.csv", stdout)
+            raw = (out / "test_cases.csv").read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))  # 엑셀 한글 표시용 BOM
+            with (out / "test_cases.csv").open(encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["function"], "Grader.grade")
+        self.assertEqual(rows[0]["model"], "local-m")
+        self.assertEqual(rows[0]["description"], "경계 확인")
+
+
+class FilterTargetsTest(unittest.TestCase):
+    def test_qualname_filter(self):
+        from testgen.cli import filter_targets
+        from testgen.coverage_extractor import extract_targets
+
+        targets = extract_targets(SAMPLE / "coverage.json", SAMPLE)
+        self.assertEqual([t.qualname for t in filter_targets(targets, "all", None, None, "grade")], ["Grader.grade"])
+        self.assertEqual(
+            [t.qualname for t in filter_targets(targets, "all", None, None, "Grader.unused")], ["Grader.unused"]
+        )
+        self.assertEqual(filter_targets(targets, "all", None, None, "nope"), [])
+
 if __name__ == "__main__":
     unittest.main()

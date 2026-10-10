@@ -25,3 +25,15 @@
 - 같은 구조(미호출 함수, 여러 줄 dict·f-string, 외부 import, 같은 파일 헬퍼)의 모듈로 실제 pytest-cov 7.16.2 출력을 생성해 재현:
   `missing_lines`에 이어지는 줄·빈 줄이 빠져 구간 5개로 쪼개지는 것 확인 → 수정 후 1개
 - `tests/fixtures/sample_project/app/ai_service.py` + 테스트 5개로 고정
+
+## 후속 확인 (개선 후 실제 프로젝트 재실행)
+
+사용자가 최신 코드 + `--framework-hint`로 dry-run을 다시 실행해 같은 함수의 프롬프트를 공유.
+
+- 1~4번 조치가 실제 프로젝트에서도 의도대로 동작: 미커버 항목 6개 → 1개(107-150), 미호출 안내 표시,
+  f-string 본문 `>>` 표시, 의존성 5개(import 출처 포함), mock 지시, 프레임워크 힌트 반영
+- 5번(프로젝트 컨텍스트)은 `--framework-hint`로 해소
+- **6번(patch 경로) 근거 확인**: 의존성 출처가 `from services.slack_service import ...`, `from utils.kst import ...`처럼
+  `app.` 접두사 없이 import됨 → 테스트 실행 시 모듈 이름이 `services.ai_service`일 가능성이 높고,
+  모델이 `app.services.ai_service.X`로 patch하면 mock이 적용되지 않을 위험. 다음 개선 후보로 승격
+- 대상 프로젝트 참고 사항(도구와 무관): 112줄 `diff_minutes` 미사용 변수, 149줄 로그 문구가 실제 사용 중인 Groq가 아닌 `GEMINI ERROR`
