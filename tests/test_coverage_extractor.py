@@ -130,6 +130,54 @@ class ModuleNameGuessTest(unittest.TestCase):
         self.assertEqual({t.module_name for t in targets if t.file == "app/ai_service.py"}, {"app.ai_service"})
 
 
+class DecisionPointsTest(unittest.TestCase):
+    """첫 실호출에서 소형 모델이 hours <= 5 참 경로, except 경로, `or` 기본값 경로를 빠뜨린 사례에 대한 대응."""
+
+    def _real_function(self):
+        import ast
+
+        from testgen.coverage_extractor import _decision_points, _dependencies, _module_symbols
+
+        path = Path(__file__).parent / "fixtures" / "real_excerpts" / "analyze_work_hours.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        node = next(n for n in tree.body if getattr(n, "name", "") == "analyze_work_hours")
+        return _decision_points(node), _dependencies(node, _module_symbols(tree, source.splitlines()))
+
+    def test_real_analyze_work_hours_checklist(self):
+        points, _ = self._real_function()
+        text = "\n".join(points)
+        self.assertIn("if `len(past_records) < 3`", text)
+        self.assertIn("경계 3", text)
+        self.assertIn("`record.work_seconds or 0`", text)
+        self.assertIn("get_today_deep_work_metrics() or", text)
+        self.assertIn("조건식(삼항) `slack_metrics.get('dnd_active')`", text)
+        self.assertIn("if `hours <= 5`", text)
+        self.assertIn("경계 5", text)
+        self.assertIn("try → 정상 완료 / 예외 발생(Exception)", text)
+
+    def test_annotation_only_dependency_marked(self):
+        _, deps = self._real_function()
+        session = next(d for d in deps if d.startswith("Session:"))
+        attendance = next(d for d in deps if d.startswith("Attendance:"))
+        self.assertIn("mock 불필요", session)
+        self.assertNotIn("mock 불필요", attendance)
+
+    def test_sample_targets_and_prompt(self):
+        targets = {t.qualname: t for t in extract_targets(SAMPLE / "coverage.json", SAMPLE)}
+        grade = targets["Grader.grade"]
+        self.assertTrue(any("경계 0" in p and "경계 100" in p for p in grade.decision_points))
+        self.assertTrue(any("반복 `range(score)` → 0회 / 1회 이상" in p for p in grade.decision_points))
+        prompt = build_prompt(grade)
+        self.assertIn("분기·조건 체크리스트 (4개", prompt)
+        self.assertIn("side_effect", prompt)
+
+    def test_signature_excludes_inner_decorator(self):
+        targets = {t.qualname: t for t in extract_targets(SAMPLE / "coverage.json", SAMPLE)}
+        deps = targets["Grader.grade"].dependencies
+        self.assertEqual(deps, ["logged: 같은 파일 함수 (라인 4): def logged(fn):"])
+
+
 class LongFunctionTest(unittest.TestCase):
     def test_long_function_truncated_around_gaps(self):
         body = "\n".join(f"    x{i} = {i}" for i in range(200))

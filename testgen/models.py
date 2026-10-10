@@ -63,6 +63,8 @@ class TestTarget:
     # 함수가 참조하는 모듈 수준 이름과 출처 (예: "get_kst_now: from utils import get_kst_now") — mock 후보
     dependencies: list[str] = field(default_factory=list)
     module_name: str | None = None  # 테스트 실행 시 import되는 모듈 이름 추정 (mock.patch 경로용)
+    # 함수 안의 분기 지점 체크리스트 (if/while/삼항/`x or 기본값`/try/for, 경계값 후보 포함)
+    decision_points: list[str] = field(default_factory=list)
 
     @property
     def target_id(self) -> str:
@@ -81,6 +83,7 @@ class TestTarget:
             "never_called": self.never_called,
             "dependencies": self.dependencies,
             "module_name": self.module_name,
+            "decision_points": self.decision_points,
             "source": self.source,
             "gaps": [g.to_dict() for g in self.gaps],
         }

@@ -2,6 +2,36 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-10 — 첫 테스트 케이스 생성 성공 → 품질 검토 → 분기 체크리스트 도입
+
+**배경**
+- thinking off 후 재실행: **첫 성공**. 9.4초(46초 → 9.4초), 입력 1,843/출력 527 토큰, `finish_reason=stop`, 케이스 2개
+- `reasoning_effort: "none"`으로 Ornith-1.5-9B의 thinking이 꺼지는 것 확인 (직전 항목의 미검증 해소).
+  thinking off에서도 JSON 스키마를 지킴 (Qwen3.5 format 무시 이슈는 이 실행에서는 나타나지 않음)
+- 같은 날 확인: push 여부 질문 → 원격 브랜치 최신 커밋 일치 확인, PC에서 브랜치 확인 방법 안내
+
+**과정**
+- QA 관점 검토 → 문제 6개 ([리뷰](reviews/2026-10-10-first-llm-cases-review.md)): 기법 라벨 오류, `hours <= 5` 참 경로 누락,
+  except 경로 착시(mock 반환값 = fallback 문구), 동등분할 누락, `Session` patch, 케이스 2개뿐
+- 원인 판단: 소형 모델이 추상 지시를 구체화하지 못함 → 분기 지점·경계 후보를 AST로 추출해 체크리스트로 제공
+- 사용자가 공유한 프롬프트의 함수 원문을 테스트 픽스처로 보존해 실제 코드 기준으로 추출 결과 검증 (8개 항목)
+- 구현 중 기존 버그 발견: 본문 첫 문장이 데코레이터 달린 내부 함수면 그 데코레이터가 시그니처에 섞임(`def logged(fn): @wraps(fn)`) → 수정
+
+**변경**
+- `testgen/coverage_extractor.py`: `_decision_points()`, `_boundary_hints()`, 타입 표기 전용 의존성 표시, 시그니처 버그 수정
+- `testgen/models.py`: `TestTarget.decision_points` (targets.json에도 출력)
+- `testgen/prompt_builder.py`: "분기·조건 체크리스트" 섹션, 규칙 6~8(전 항목 양쪽 커버, technique 표기 기준, 예외는 side_effect), patch 전체 경로 기재
+- `tests/fixtures/real_excerpts/analyze_work_hours.py`(실제 함수 발췌), 테스트 4개 추가
+
+**검증**
+- 단위 테스트 53개 통과
+- 실제 함수 발췌에서 체크리스트 8개(경계 3·5, `or` 기본값 3개, 삼항 2개, try) 추출 확인
+- **미검증**: 개선 프롬프트로 모델이 실제로 더 나은 케이스를 내는지 — 사용자 재실행 필요
+
+**다음**
+- 같은 명령으로 재실행 → 리뷰 문서의 문제 6개와 비교
+- 품질이 충분하면 `--qualname` 없이 소규모(`--limit 5`) → 전체 107개
+
 ## 2026-10-10 — 두 번째 실호출: 답 본문이 빈 응답(추론형 모델 thinking) → thinking 기본 끄기
 
 **배경**
