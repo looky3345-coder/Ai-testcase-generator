@@ -1,7 +1,7 @@
 # 0005. 3단계: 테스트 코드 생성 → 실행 → 커버리지 측정
 
-- 상태: 제안 (사용자 확인 대기)
-- 날짜: 2026-10-10
+- 상태: 채택
+- 날짜: 2026-10-10 제안, 2026-10-17 채택 (사용자: 대상 프로젝트 tests 아래에 파일 작성 동의)
 
 ## 배경
 2단계(케이스 설계) 4차 결과에서 프롬프트 개선만으로는 다음을 막지 못했다.
@@ -20,7 +20,7 @@
   - B: **대상 프로젝트의 tests 아래 전용 폴더(예: `tests/_ai_generated/`)** — conftest 적용. 대상 프로젝트에 파일을 쓰게 됨 (사용자 동의 필요)
 - 어떤 Python으로 실행하나: **대상 프로젝트의 `.venv`의 python** (`--target-python` 옵션)
 
-## 결정 (제안)
+## 결정
 1. `testgen` 하위 명령 또는 옵션으로 3단계 추가: 대상별 케이스 → LLM이 pytest 파일 생성 → 문법 검사(`ast.parse`)
 2. 대상 프로젝트 `tests/_ai_generated/test_<대상>.py`에 저장 후, 그 파일만 `pytest --cov --cov-branch`로 실행
 3. 판정: 케이스(테스트 함수)별 통과/실패 + **대상 함수의 미커버 라인·분기가 실제로 커버됐는지**
@@ -31,3 +31,11 @@
 - 대상 프로젝트에 파일이 생김 → 전용 폴더로 격리, 원본 테스트는 건드리지 않음
 - 실행 환경(대상 `.venv`, 가짜 API 키 등)이 갖춰져 있어야 함 — coverage.json 생성 때와 동일
 - 실행 시간: 생성(LLM) + pytest 실행 + 재시도. `--qualname` 1개로 먼저 검증 후 확대
+
+## 구현 메모 (2026-10-17)
+- `testgen/codegen.py`: `collect_project_context`(conftest 픽스처·기존 import 수집), `build_codegen_prompt`/`build_fix_prompt`,
+  `run_tests`(대상 Python으로 생성 파일 1개만 `pytest --cov --cov-branch --junitxml` 실행), `prune_failing`, `generate_and_run`
+- 코드 생성은 JSON 스키마 강제 없이 자유 텍스트(```python 블록)로 받는다 (`LLMBackend.run(structured=False)`). 코드를 JSON 문자열에 담으면 이스케이프 오류가 잦기 때문
+- 판정 기준은 원래 갭 목록이 아니라 **새 실행에서 함수 범위(start_line~end_line)에 남은 미실행 라인·분기** — 빈 줄·이어지는 줄 문제 없이 실제 실행 가능 문장만 본다
+- 수집 오류(import 실패 등)·전부 실패는 파일 제거, 일부 실패는 해당 테스트 함수만 제거 후 재실행해 확인(parametrize는 함수 단위 제거)
+- 실행 시 `COVERAGE_FILE`을 출력 폴더로 돌려 대상 프로젝트에 `.coverage`가 생기지 않게 함

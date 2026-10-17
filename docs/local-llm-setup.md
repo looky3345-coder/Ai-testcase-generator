@@ -92,6 +92,11 @@ python.exe -m testgen.cli <경로 옵션들> --models "local:ornith15-9b-16k" --
 - 프롬프트가 바뀐 함수(도구 업데이트, `--framework-hint` 변경 등)는 자동으로 다시 호출된다
 - `test_cases.csv`에는 재사용한 결과까지 모두 들어간다
 
+### 4-4. 테스트 코드 생성·실행 (3단계)
+
+4-2 명령에 `--generate-code`를 붙인다. 같은 PowerShell 창에서 `$env:GROQ_API_KEY = "dummy-key-for-coverage"`를 먼저 설정.
+대상 프로젝트 `.venv`에 `pytest-cov`가 있어야 한다 (4-1에서 설치함). 함수 1개당 LLM 호출이 케이스 1회 + 코드 1~3회로 늘어난다.
+
 ## 5. GPU 부담
 
 - 부하 수준은 게임과 비슷하며, 이 도구는 생성 중에만 짧게(호출당 수 초~수십 초) 사용하고 쉬는 간헐적 부하다. 상시 고부하(채굴 등)와 다름

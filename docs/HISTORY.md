@@ -2,6 +2,42 @@
 
 최신 항목이 위. 규칙은 루트 `CLAUDE.md` 참고.
 
+## 2026-10-17 — 3단계 구현: 테스트 코드 생성 → 실행 → 판정 → 피드백 → 실패 테스트 제거
+
+**배경**
+- MR #5 병합 확인 후 작업 브랜치를 master로 fast-forward (병합 안 된 커밋 없음, 히스토리 재작성 없음)
+- 사용자 결정: 대상 프로젝트 `tests/_ai_generated/`에 생성 테스트 작성 동의, 대상 프로젝트는 GitHub에 있음
+  → `looky3345-coder/Checkine-Automation-Project`(공개)를 이 환경에 읽기 전용으로 받아 직접 확인. ADR 0005 채택
+
+**과정**
+- 대상 프로젝트 분석: `pytest.ini`의 `pythonpath = . app` 때문에 `ai_service`는 `services.ai_service`로 import됨 → 도구의 모듈명 추정이 맞았음을 확인.
+  conftest 픽스처 6개(setup_db, client, user_token, admin_token, user_headers, admin_headers), DB는 `database.SessionLocal`을 SQLite로 교체하는 방식
+- 이 환경에 대상 프로젝트 의존성을 설치해 기존 테스트 실행: 49개 통과, coverage.json으로 도구 dry-run → 갭 131/대상 107로 사용자 PC와 동일
+- **사람이 직접 4차 케이스를 pytest로 옮겨 기준선 확보**: 10개 통과, `analyze_work_hours` 라인·분기 100% 커버.
+  여기서 코드 생성 프롬프트에 필요한 정보를 확인 — import 경로(`from services import ai_service`), DB 세션은 MagicMock 쿼리 체인으로 충분,
+  mock 반환형(`get_kst_now`는 datetime이어야 함 — 4차 케이스의 'Monday'는 실제로 AttributeError)
+- 구현 중 발견: pytest JUnit은 수집 오류를 빈 classname + `tests._ai_generated.test_…` 이름으로 기록 → 이름 접두사가 아니라 classname으로 판별하도록 수정(커밋 전)
+- **실제 대상 프로젝트로 종단 확인**(LLM은 가짜 서버로 대체): 사용자의 4차 케이스 → 1차 코드(실제 모델이 저지른 'Monday' 실수 재현) 실행 시
+  통과 1 / 실패 1 / 미실행 라인 14·분기 2 → 실패 메시지 `AttributeError: 'str' object has no attribute 'strftime'`와 미실행 라인이 수정 프롬프트에 전달됨 →
+  2차 코드 통과 10 / 함수 완전 커버 → **채택**. 대상 프로젝트에 `.coverage` 등 부산물이 남지 않음을 확인 (검증 후 생성 파일은 로컬 클론에서 삭제, 대상 저장소에는 push하지 않음)
+
+**변경**
+- `testgen/codegen.py` (신규): 프로젝트 테스트 환경 수집, 코드 생성/수정 프롬프트, 코드 추출·문법 검사, 실행·JUnit/커버리지 판정, 실패 테스트 제거, 전체 루프
+- `testgen/cli.py`: `--generate-code`, `--target-python`(기본 `.venv` 자동 탐색), `--fix-rounds`(2), `--test-timeout`(300), `--generated-dir`, 3단계 요약
+- `testgen/llm_runner.py`: `run(..., structured=False)` — 코드 생성은 JSON 스키마 강제 없이
+- `testgen/models.py`, `coverage_extractor.py`: `TestTarget.end_line` (함수 범위 판정용)
+- 문서: README 전체 구조(3~5단계 통합)·3단계 사용법, ADR 0005 채택·구현 메모, 설치 가이드 4-4
+
+**검증**
+- 단위 테스트 74개 통과 (신규 11개). 그중 실제 pytest 실행 테스트 4개(피드백으로 실패 수정→채택, 지속 실패 테스트 제거→부분 채택,
+  import 오류→제외·파일 삭제, 문법 오류 재시도)는 pytest-cov가 있는 Python에서 실행 (`TESTGEN_TEST_PYTHON`), 기본 환경에서는 건너뜀
+- 실제 대상 프로젝트 + 대상 프로젝트 venv로 종단 실행 확인 (위 과정)
+- **미검증**: 실제 Ornith-1.5-9B가 쓴 코드의 품질과 수정 라운드 효과, Windows 경로에서의 실행 — 사용자 PC 실행 필요
+
+**다음**
+- 사용자 PC에서 `--qualname analyze_work_hours --generate-code` 실행 → 라운드별 결과 검토
+- 결과에 따라 코드 생성 프롬프트 보강, 이후 `--limit` + `--resume`으로 범위 확대
+
 ## 2026-10-10 — 오늘 작업 마무리: master 병합 예정, 다음 세션 시작점
 
 **배경**

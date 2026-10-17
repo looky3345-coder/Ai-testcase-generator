@@ -22,7 +22,8 @@ from testgen.models import LLMResponse
 class LLMBackend:
     name: str
 
-    def run(self, target_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str, structured: bool = True) -> LLMResponse:
+        """structured=False면 출력 형식(JSON 스키마) 강제 없이 자유 텍스트로 받는다 (테스트 코드 생성용)."""
         raise NotImplementedError
 
     def check_model(self) -> str | None:
@@ -39,7 +40,7 @@ class CLIBackend(LLMBackend):
         self.command = [resolved or command[0], *command[1:]]
         self.timeout = timeout
 
-    def run(self, target_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str, structured: bool = True) -> LLMResponse:
         start = time.monotonic()
 
         def fail(error: str, raw_output: str = "") -> LLMResponse:
@@ -140,7 +141,7 @@ class OpenAICompatBackend(LLMBackend):
             f"  `ollama list`의 NAME을 --models \"local:<NAME>\"에 그대로 쓰거나, `ollama cp <NAME> <별칭>`으로 별칭을 만드세요."
         )
 
-    def _request_body(self, prompt: str) -> dict:
+    def _request_body(self, prompt: str, structured: bool = True) -> dict:
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -150,7 +151,7 @@ class OpenAICompatBackend(LLMBackend):
         if not self.thinking:
             # Ollama의 OpenAI 호환 API는 reasoning_effort "none"을 사고 과정 끄기로 처리한다
             body["reasoning_effort"] = "none"
-        if self.response_schema is not None:
+        if structured and self.response_schema is not None:
             # 지원 런타임에서는 문법 제약 디코딩으로 스키마를 벗어난 출력 자체가 나오지 않는다
             body["response_format"] = {
                 "type": "json_schema",
@@ -158,7 +159,7 @@ class OpenAICompatBackend(LLMBackend):
             }
         return body
 
-    def run(self, target_id: str, prompt: str) -> LLMResponse:
+    def run(self, target_id: str, prompt: str, structured: bool = True) -> LLMResponse:
         start = time.monotonic()
         command = ["POST", self.url, f"model={self.model}"]
 
@@ -175,7 +176,7 @@ class OpenAICompatBackend(LLMBackend):
 
         request = urllib.request.Request(
             self.url,
-            data=json.dumps(self._request_body(prompt)).encode("utf-8"),
+            data=json.dumps(self._request_body(prompt, structured)).encode("utf-8"),
             headers=self._headers(),
             method="POST",
         )

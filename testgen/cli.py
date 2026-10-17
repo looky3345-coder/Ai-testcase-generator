@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from testgen.case_parser import TEST_CASES_SCHEMA, parse_test_cases
+from testgen.codegen import collect_project_context, default_target_python, generate_and_run
 from testgen.config import DEFAULT_LOCAL_BASE_URL, DEFAULT_OUTPUT_DIR, LOCAL_API_KEY
 from testgen.coverage_extractor import extract_targets
 from testgen.llm_runner import build_backends
@@ -64,6 +65,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=4, help="LLM 호출 동시 실행 개수")
     parser.add_argument("--dry-run", action="store_true", help="갭 추출과 프롬프트 생성만 하고 LLM은 호출하지 않음")
+    parser.add_argument(
+        "--generate-code",
+        action="store_true",
+        help="3단계: 생성된 케이스로 pytest 코드를 만들어 대상 프로젝트에서 실행하고, 실패·미실행 경로를 피드백해 고친다",
+    )
+    parser.add_argument(
+        "--target-python",
+        default=None,
+        help="생성 테스트를 실행할 대상 프로젝트의 Python (기본: source-root의 .venv 자동 탐색, 없으면 현재 Python)",
+    )
+    parser.add_argument("--fix-rounds", type=int, default=2, help="실패 시 LLM에 결과를 돌려줘 고치게 하는 최대 횟수")
+    parser.add_argument("--test-timeout", type=int, default=300, help="생성 테스트 1회 실행 제한 시간(초)")
+    parser.add_argument(
+        "--generated-dir",
+        default="tests/_ai_generated",
+        help="대상 프로젝트 안에 생성 테스트를 저장할 폴더 (source-root 기준)",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -294,7 +312,47 @@ def main(argv: list[str] | None = None) -> int:
     cases_csv = output_dir / "test_cases.csv"
     written = write_cases_csv(finished, cases_csv)
     print(f"생성된 테스트 케이스 {written}개 모아보기 (엑셀로 열기): {cases_csv}")
+
+    if args.generate_code:
+        run_codegen(args, finished, {runner.name: runner for runner in runners}, output_dir)
     return 0
+
+
+def run_codegen(args, finished, runners_by_name, output_dir: Path) -> None:
+    """3단계: 케이스가 있는 대상×모델마다 테스트 코드 생성 → 실행 → 피드백. pytest 실행이 겹치지 않도록 순차 실행."""
+    jobs = [(t, r) for t, r in finished if r.ok and r.test_cases]
+    target_python = args.target_python or default_target_python(args.source_root)
+    context = collect_project_context(args.source_root)
+    print(f"\n[3/3] 테스트 코드 생성·실행 {len(jobs)}건 (대상 프로젝트 Python: {target_python})")
+    print(f"  conftest 픽스처 {len(context.fixtures)}개, 생성 테스트 저장 위치: {args.source_root / args.generated_dir}")
+    reports_dir = output_dir / "codegen"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    reports = []
+    for i, (target, response) in enumerate(jobs, start=1):
+        print(f"  [{i}/{len(jobs)}] {response.model} / {target.qualname or target.file}")
+        report = generate_and_run(
+            target, response, runners_by_name[response.model], args.source_root, output_dir, target_python,
+            context, args.framework_hint, args.generated_dir, args.fix_rounds, args.test_timeout,
+            log=lambda message: print(message),
+        )
+        (reports_dir / f"{target.target_id}__{response.model}.json").write_text(
+            json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        reports.append(report)
+        label = {"accepted": "채택", "partial": "부분 채택", "rejected": "제외"}[report.status]
+        detail = f"통과 테스트 {report.final_passed}개"
+        if report.removed_tests:
+            detail += f", 실패로 제거 {len(report.removed_tests)}개"
+        if report.test_file:
+            detail += f", 함수 미실행 라인 {len(report.uncovered_lines)}개·분기 {len(report.uncovered_branches)}개"
+        print(f"    → {label}: {detail}" + (f" ({report.note})" if report.note else ""))
+        if report.test_file:
+            print(f"      파일: {args.source_root / report.test_file}")
+
+    print("\n=== 3단계 요약 ===")
+    for status, label in (("accepted", "채택(전부 통과 + 함수 완전 커버)"), ("partial", "부분 채택"), ("rejected", "제외")):
+        print(f"  {label}: {sum(r.status == status for r in reports)}건")
+    print(f"  보고서: {reports_dir}")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ class TestTarget:
     module_name: str | None = None  # 테스트 실행 시 import되는 모듈 이름 추정 (mock.patch 경로용)
     # 함수 안의 분기 지점 체크리스트 (if/while/삼항/`x or 기본값`/try/for, 경계값 후보 포함)
     decision_points: list[str] = field(default_factory=list)
+    end_line: int | None = None  # 함수 끝 라인 (3단계에서 실행 후 함수 범위 커버리지 판정용)
 
     @property
     def target_id(self) -> str:
@@ -84,6 +85,7 @@ class TestTarget:
             "dependencies": self.dependencies,
             "module_name": self.module_name,
             "decision_points": self.decision_points,
+            "end_line": self.end_line,
             "source": self.source,
             "gaps": [g.to_dict() for g in self.gaps],
         }

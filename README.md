@@ -5,7 +5,7 @@
 분석 대상 프로젝트와는 완전히 독립된 도구다. 대상 프로젝트의 `coverage.json`과
 소스 루트 경로를 CLI 인자로 받아 동작하며, 대상 프로젝트의 코드를 임포트하지 않는다.
 
-## 전체 구조 (계획)
+## 전체 구조
 
 1. **커버리지 갭 추출** — pytest-cov `coverage.json`에서 미커버 라인/분기(방향 포함)를 찾아
    **함수 단위로 묶고** 함수 전체 소스와 함께 추출 (구현 완료: `testgen/coverage_extractor.py`)
@@ -13,9 +13,11 @@
    테스트 케이스를 요청하고, 응답 JSON을 스키마로 검증 (구현 완료: `testgen/prompt_builder.py`,
    `testgen/llm_runner.py`, `testgen/case_parser.py`, `testgen/cli.py`)
    - 무과금 로컬 모델(Ollama 등 OpenAI 호환 API, 예: Ornith) 또는 유료 CLI(`claude -p`, `codex exec`) 선택
-3. **교차검증** — 두 모델 결과 중 공통 케이스를 신뢰도 높음으로 분류 (미구현)
-4. **CSV 변환 + 실행** — 케이스를 CSV로 변환해 기존 pytest 프레임워크로 실행 (미구현)
-5. **피드백 루프** — 실패 로그를 다시 LLM에 넣어 추가 엣지케이스 제안 (미구현)
+3. **테스트 코드 생성 → 실행 → 판정 → 피드백** (`--generate-code`, 구현: `testgen/codegen.py`) —
+   케이스 설계를 LLM이 pytest 코드로 작성 → 대상 프로젝트에서 실행·커버리지 측정 →
+   실패 메시지와 아직 실행되지 않은 라인/분기를 LLM에 돌려줘 수정(최대 `--fix-rounds`회) →
+   끝까지 실패하는 테스트는 제거하고 통과한 테스트만 대상 프로젝트에 남김.
+   원래 계획의 3(교차검증)·4(CSV 실행)·5(피드백) 단계를 "실행 결과로 판정"하는 하나의 루프로 통합 ([ADR 0005](docs/decisions/0005-test-code-generation-and-execution.md))
 
 ## 개발 히스토리
 
@@ -78,6 +80,7 @@ python -m testgen.cli \
 - `--qualname <이름>` : 특정 함수만 처리 (예: `analyze_work_hours`, `Class.method`). LLM 실호출을 1개로 시작할 때 유용
 - `--models claude` : 한쪽 모델만 호출 (`claude`, `codex`, `local:<모델명>` 콤마 구분)
 - `--local-base-url <url>` : 로컬 런타임 주소 (기본 Ollama, 환경변수 `TESTGEN_LOCAL_BASE_URL`)
+- `--generate-code` : 3단계 실행 (`--target-python`, `--fix-rounds`(기본 2), `--test-timeout`(기본 300초), `--generated-dir`)
 - `--resume` : 같은 프롬프트로 이미 성공한 대상×모델은 다시 호출하지 않고 재사용 (`--limit`을 늘려 가며 나눠 실행할 때)
 - `--local-thinking off|on` : 로컬 추론형 모델의 사고 과정 (기본 `off`. 켜면 느리고 답 본문이 빈 채로 올 수 있음)
 - `--limit N` : 처리할 대상 함수 개수 상한 (LLM 호출은 비용이 드므로 먼저 소규모로 테스트 권장)
@@ -94,6 +97,25 @@ python -m testgen.cli \
 - `output/test_cases.csv` — **생성된 테스트 케이스 전체 모아보기** (한 줄에 케이스 하나, 엑셀로 바로 열림).
   공통 사전조건(`common_preconditions`)과 중복 의심 표시(`review_note`) 열 포함.
   LLM 실행 시에만 생성되며 dry-run에서는 만들어지지 않음
+
+### 3단계: 테스트 코드 생성·실행 (`--generate-code`)
+
+```powershell
+$env:GROQ_API_KEY = "dummy-key-for-coverage"   # 대상 프로젝트가 import 시 요구하는 환경변수
+python -m testgen.cli `
+  --coverage-json "<backend 폴더>" --source-root "<backend 폴더>" `
+  --framework-hint "FastAPI + SQLAlchemy. tests/conftest.py의 DB 세션/TestClient 픽스처 사용" `
+  --qualname analyze_work_hours --models "local:ornith15-9b-16k" --workers 1 `
+  --generate-code
+```
+
+- 생성 테스트는 대상 프로젝트의 `tests/_ai_generated/test_<함수>_<target_id>.py`에 저장된다 (`--generated-dir`로 변경).
+  기존 테스트는 건드리지 않으며, 실패해서 제외된 파일은 지워진다
+- 실행에는 **대상 프로젝트의 Python**을 쓴다. 기본은 `<source-root>/.venv`를 자동 탐색, 다르면 `--target-python`.
+  그 환경에 `pytest-cov`가 있어야 한다
+- 판정: `채택`(전부 통과 + 함수의 미실행 라인·분기 0) / `부분 채택`(일부 제거 또는 미커버 남음) / `제외`
+- 라운드별 프롬프트·코드·실행 결과: `output/codegen/<target_id>__<model>/`, 요약 보고서: `output/codegen/<target_id>__<model>.json`
+- tests/conftest.py의 픽스처와 기존 테스트의 import 방식은 자동으로 읽어 프롬프트에 넣는다
 
 ### 로컬 모델 사용법 (무과금)
 
