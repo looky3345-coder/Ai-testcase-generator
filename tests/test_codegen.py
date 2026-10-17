@@ -1,3 +1,4 @@
+import dataclasses
 import importlib.util
 import os
 import shutil
@@ -9,7 +10,10 @@ from pathlib import Path
 
 from testgen.codegen import (
     ProjectTestContext,
+    RunResult,
+    TestOutcome,
     build_codegen_prompt,
+    build_fix_prompt,
     collect_project_context,
     extract_code,
     generate_and_run,
@@ -140,6 +144,59 @@ class PromptTest(unittest.TestCase):
         self.assertIn('"score=101"', prompt)
         self.assertIn("- client (scope=session)", prompt)
         self.assertNotIn(">>", prompt.split("소스:")[1].split("```")[1])  # 미실행 표시는 코드 생성 프롬프트에서 제거
+
+
+# 2026-10-17 사용자 PC 실행(analyze_work_hours, Ornith-1.5-9B)에서 실제로 나온 실패 메시지 형태
+_FALLBACK_SOURCE = (
+    "    146:     try:\n"
+    "    147:         return generate_with_retry(prompt, max_tokens=80)\n"
+    "    148:     except Exception as e:\n"
+    "    149:         print(f\"GEMINI ERROR: {str(e)}\")\n"
+    "    150:         return \"AI 매니저가 잠시 디버깅 중이에요! 🛠️ 곧 위트 있는 분석을 가져올게요.\"\n"
+)
+_FALLBACK_MESSAGE = (
+    "AssertionError: assert 'AI 매니저가 잠시 디...있는 분석을 가져올게요.' == '완벽한 하루였어! 🌙'\n"
+    "  - 완벽한 하루였어! 🌙\n  + AI 매니저가 잠시 디버깅 중이에요! 🛠️ 곧 위트 있는 분석을 가져올게요."
+)
+
+
+def _fallback_target():
+    source = "    106: def analyze_work_hours(db, user_id, current_work_seconds):\n" + _FALLBACK_SOURCE
+    return dataclasses.replace(_grade_target(), qualname="analyze_work_hours", source=source)
+
+
+def _failed(message):
+    return RunResult(returncode=1, tests=[TestOutcome(name="test_tc1", outcome="failed", message=message)])
+
+
+class FixPromptHintTest(unittest.TestCase):
+    def test_rule8_in_both_prompts(self):
+        target = _grade_target()
+        codegen = build_codegen_prompt(target, _cases_response(), ProjectTestContext(), "tests/x.py", None)
+        fix = build_fix_prompt(target, "def test_a(): pass\n", _failed("AssertionError"))
+        for prompt in (codegen, fix):
+            self.assertIn("8. patch는 반드시 적용된 상태에서", prompt)
+
+    def test_patch_object_not_started_hint(self):
+        prompt = build_fix_prompt(
+            _grade_target(), "x = 1\n", _failed("AttributeError: '_patch' object has no attribute 'call_args'")
+        )
+        self.assertIn("원인 힌트:", prompt)
+        self.assertIn("적용(with/start())하지 않았습니다", prompt)
+
+    def test_except_path_result_hint(self):
+        prompt = build_fix_prompt(_fallback_target(), "x = 1\n", _failed(_FALLBACK_MESSAGE))
+        self.assertIn("except 경로 반환값", prompt)
+        self.assertIn("'AI 매니저가 잠시...'", prompt)  # 리터럴 앞 10자 + ...
+
+    def test_no_hint_for_ordinary_failure(self):
+        prompt = build_fix_prompt(_fallback_target(), "x = 1\n", _failed("AssertionError: assert 3 == 4"))
+        self.assertNotIn("원인 힌트:", prompt)
+
+    def test_unparsable_source_has_no_literals_and_no_crash(self):
+        target = dataclasses.replace(_grade_target(), source="    1: def broken(:\n")
+        prompt = build_fix_prompt(target, "x = 1\n", _failed(_FALLBACK_MESSAGE))
+        self.assertNotIn("except 경로 반환값", prompt)
 
 
 class _ScriptedBackend(LLMBackend):

@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -105,6 +106,11 @@ def _rules(target: TestTarget) -> str:
    입력만 다른 케이스(경계값 등)는 @pytest.mark.parametrize로 묶어도 됩니다.
 6. 설계의 expected를 assert로 검증하세요. mock에 전달된 인자를 검증해야 하면 `mock.call_args`를 쓰세요.
 7. 설계가 실제 코드와 맞지 않으면(잘못된 mock 대상·반환형, 필요 없는 mock 등) 코드에 맞게 고쳐 작성하고 짧은 주석으로 이유를 남기세요.
+8. patch는 반드시 적용된 상태에서 대상 함수를 호출하세요.
+   `with patch.object(...) as mock_x:` 또는 `mock_x = patcher.start()`(끝나면 `patcher.stop()`)로 쓰세요.
+   `patch.object(...)`를 만들어 리스트나 변수에 담기만 하면 mock이 적용되지 않아 실제 함수가 호출됩니다.
+   `call_args`·`assert_called_once()`는 patch 객체가 아니라 with/start()가 돌려준 mock 객체에서 쓰세요.
+   외부 의존성을 mock했다면 그 mock이 실제로 호출됐는지(`assert_called_once()` 등)도 검증하세요.
 출력: 설명 없이 ```python 코드 블록 하나만 출력하세요 (파일 전체)."""
 
 
@@ -147,6 +153,50 @@ def build_codegen_prompt(
 """
 
 
+_LINE_NO_RE = re.compile(r"^\s*\d+: ?", re.MULTILINE)
+_PATCH_NOT_STARTED = "'_patch' object has no attribute"
+
+
+def _except_return_literals(target: TestTarget) -> list[str]:
+    """대상 소스의 except 블록이 return하는 문자열 리터럴. 소스를 파싱하지 못하면 빈 목록."""
+    code = textwrap.dedent(_LINE_NO_RE.sub("", _plain_source(target)))
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    literals = []
+    for handler in ast.walk(tree):
+        if isinstance(handler, ast.ExceptHandler):
+            for node in ast.walk(handler):
+                if (isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)):
+                    literals.append(node.value.value)
+    return literals
+
+
+def _mock_hints(target: TestTarget, result: "RunResult") -> list[str]:
+    """실패 메시지에서 'mock이 적용되지 않았다'는 흔한 징후를 찾아 수정 프롬프트용 힌트로 만든다.
+    작은 모델은 결과값만 보고 expected를 고치려 해서 같은 실패를 반복하므로, 원인을 직접 짚어 준다."""
+    messages = [t.message for t in result.tests if t.outcome in ("failed", "error")]
+    hints = []
+    if any(_PATCH_NOT_STARTED in m for m in messages):
+        hints.append(
+            "- `'_patch' object has no attribute ...` 오류: patch 객체를 만들기만 하고 적용(with/start())하지 않았습니다. "
+            "call_args는 patch 객체가 아니라 mock 객체에서 읽어야 합니다. 규칙 8을 따르세요."
+        )
+    # pytest는 긴 문자열을 '앞부분...뒷부분'으로 줄여 보여주므로 앞 10자로 비교한다
+    prefixes = {lit[:10] for lit in _except_return_literals(target) if len(lit) >= 10}
+    hit = sorted(p for p in prefixes if any(p in m for m in messages))
+    if hit:
+        hints.append(
+            "- 실패한 테스트의 실제 결과가 대상 함수의 except 경로 반환값입니다"
+            f" ({', '.join(repr(h + '...') for h in hit)}). "
+            "mock이 적용되지 않아 실제 외부 함수가 호출되어 예외가 났을 가능성이 높습니다. "
+            "expected를 바꾸지 말고 mock이 실제로 적용됐는지 먼저 고치세요 (규칙 8)."
+        )
+    return hints
+
+
 def build_fix_prompt(target: TestTarget, code: str, result: "RunResult") -> str:
     failures = "\n".join(
         f"- {t.name}: {t.message[:600]}" for t in result.tests if t.outcome in ("failed", "error")
@@ -156,6 +206,8 @@ def build_fix_prompt(target: TestTarget, code: str, result: "RunResult") -> str:
         f"- 아직 실행되지 않은 대상 함수 라인: {result.uncovered_lines or '없음'}\n"
         f"- 아직 실행되지 않은 분기 (출발->도착, 음수는 함수 종료): {result.uncovered_branches or '없음'}"
     )
+    hints = _mock_hints(target, result)
+    hint_text = ("\n원인 힌트:\n" + "\n".join(hints) + "\n") if hints else ""
     return f"""아래 pytest 파일을 실행한 결과 문제가 있습니다. 문제를 고친 파일 전체를 다시 작성하세요.
 통과한 테스트는 그대로 유지하고, 실패한 테스트와 빠진 경로만 고치거나 추가하세요.
 
@@ -174,7 +226,7 @@ def build_fix_prompt(target: TestTarget, code: str, result: "RunResult") -> str:
 {collection}실패한 테스트:
 {failures}
 {uncovered}
-
+{hint_text}
 {_rules(target)}
 """
 
