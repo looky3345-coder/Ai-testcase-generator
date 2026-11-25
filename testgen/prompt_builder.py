@@ -43,11 +43,15 @@ def build_prompt(target: TestTarget, framework_hint: str | None = None) -> str:
         dep_list = "\n".join(f"- {d}" for d in target.dependencies)
         patch_hint = ""
         if target.module_name:
-            first = target.dependencies[0].split(":")[0]
-            patch_hint = (
-                f"\npatch 경로: 이 파일은 `{target.module_name}` 모듈로 import되는 것으로 추정됩니다 (파일의 import 방식 기준)."
-                f"\n이 파일이 참조하는 이름을 patch하세요. 예: patch(\"{target.module_name}.{first}\")\n"
+            candidate = next(
+                (d for d in target.dependencies if "mock 불필요" not in d), None,
             )
+            if candidate:
+                first = candidate.split(":")[0]
+                patch_hint = (
+                    f"\npatch 경로: 이 파일은 `{target.module_name}` 모듈로 import되는 것으로 추정됩니다 (파일의 import 방식 기준)."
+                    f"\n이 파일이 참조하는 이름을 patch하세요. 예: patch(\"{target.module_name}.{first}\")\n"
+                )
         dependencies = f"""
 이 코드가 참조하는 모듈 수준 이름과 출처 (테스트에서 준비하거나 mock/patch할 후보):
 {dep_list}
